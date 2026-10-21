@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>國小導師日常駕駛艙｜班級管理與教學儀表板</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&display=swap');
+    body { font-family: 'Noto Sans TC', sans-serif; background-color: #f8fafc; }
+  </style>
+</head>
+<body class="text-slate-800 antialiased min-h-screen flex flex-col">
+
+  <!-- 頂部導航列 -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex justify-between items-center">
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-md">
+          <i class="fa-solid fa-graduation-cap text-lg"></i>
+        </div>
+        <div>
+          <h1 class="text-lg font-bold text-slate-900 leading-tight">導師日常駕駛艙</h1>
+          <p class="text-xs text-slate-500">國小中年級班級營運與行程待辦</p>
+        </div>
+      </div>
+      <div class="flex items-center space-x-3">
+        <span id="currentDateBadge" class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-100">
+          <i class="fa-regular fa-calendar-days mr-1.5"></i>載入中...
+        </span>
+        <button onclick="refreshData()" class="p-2 text-slate-500 hover:text-indigo-600 hover:bg-slate-100 rounded-lg transition" title="重新整理">
+          <i class="fa-solid fa-rotate-right"></i>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- 主要內容區 -->
+  <main class="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full space-y-6">
+
+    <!-- 頂部四格統計卡 -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <!-- 班級規模 -->
+      <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex items-center justify-between">
+        <div>
+          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">班級學生人數</p>
+          <h3 id="statStudents" class="text-2xl font-extrabold text-slate-800 mt-1">28 <span class="text-sm font-normal text-slate-500">人</span></h3>
+          <p class="text-xs text-slate-500 mt-1">每生班費收 $300 元</p>
+        </div>
+        <div class="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center text-xl">
+          <i class="fa-solid fa-users"></i>
+        </div>
+      </div>
+
+      <!-- 班費總收 -->
+      <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex items-center justify-between">
+        <div>
+          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">本學期應收班費</p>
+          <h3 id="statIncome" class="text-2xl font-extrabold text-emerald-600 mt-1">$8,400</h3>
+          <p class="text-xs text-emerald-600 mt-1"><i class="fa-solid fa-circle-check mr-1"></i>全班已繳齊</p>
+        </div>
+        <div class="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl">
+          <i class="fa-solid fa-wallet"></i>
+        </div>
+      </div>
+
+      <!-- 目前累計支出 -->
+      <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex items-center justify-between">
+        <div>
+          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">累計核銷支出</p>
+          <h3 id="statExpense" class="text-2xl font-extrabold text-rose-600 mt-1">$0</h3>
+          <p id="statExpenseCount" class="text-xs text-slate-500 mt-1">0 筆收據核銷</p>
+        </div>
+        <div class="w-12 h-12 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center text-xl">
+          <i class="fa-solid fa-receipt"></i>
+        </div>
+      </div>
+
+      <!-- 目前結餘 -->
+      <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex items-center justify-between">
+        <div>
+          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">班費目前結餘</p>
+          <h3 id="statBalance" class="text-2xl font-extrabold text-indigo-600 mt-1">$8,400</h3>
+          <div class="w-full bg-slate-100 rounded-full h-1.5 mt-2 overflow-hidden">
+            <div id="balanceProgress" class="bg-indigo-600 h-1.5 rounded-full" style="width: 100%"></div>
+          </div>
+        </div>
+        <div class="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center text-xl">
+          <i class="fa-solid fa-piggy-bank"></i>
+        </div>
+      </div>
+    </div>
+
+    <!-- 核心兩欄版面 -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+      <!-- 左欄 (8 欄)：今日各節課表與 RDQ 生成的客製待辦 -->
+      <div class="lg:col-span-8 space-y-6">
+        
+        <!-- 今日各節待辦與教學指引 -->
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+            <div class="flex items-center space-x-2.5">
+              <span class="w-3 h-3 rounded-full bg-indigo-500"></span>
+              <h2 class="text-base font-bold text-slate-900">今日各節次待辦與教學建議（早自習至第七節）</h2>
+            </div>
+            <span class="text-xs text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-md font-medium">由 Gemini 結合 RDQ 自動規劃</span>
+          </div>
+          <div class="p-6">
+            <div id="todayPlanContent" class="prose prose-sm max-w-none text-slate-700 whitespace-pre-wrap leading-relaxed">
+              載入今日各節次教學建議中...
+            </div>
+          </div>
+        </div>
+
+        <!-- 今日課表節次清單 -->
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+            <div class="flex items-center space-x-2.5">
+              <i class="fa-regular fa-clock text-indigo-500"></i>
+              <h2 class="text-base font-bold text-slate-900">今日作息課表</h2>
+            </div>
+          </div>
+          <div class="p-6">
+            <div id="scheduleTimeline" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+              <!-- 動態填入課表節次 -->
+            </div>
+          </div>
+        </div>
+
+        <!-- 學生突發事件與親師追蹤 -->
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+            <div class="flex items-center space-x-2.5">
+              <i class="fa-solid fa-triangle-exclamation text-amber-500"></i>
+              <h2 class="text-base font-bold text-slate-900">學生突發事件與追蹤記錄</h2>
+            </div>
+            <span class="text-xs text-slate-500">LINE 傳送文字或照片自動記錄</span>
+          </div>
+          <div class="p-6">
+            <div id="incidentsList" class="space-y-3">
+              <p class="text-sm text-slate-400 py-4 text-center">暫無突發事件紀錄，班級秩序良好！</p>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 右欄 (4 欄)：班費收支明細與學校行事曆 -->
+      <div class="lg:col-span-4 space-y-6">
+
+        <!-- 學校重大行事 -->
+        <div class="bg-gradient-to-br from-indigo-50 to-blue-50/50 border border-indigo-100 rounded-2xl p-5 shadow-sm">
+          <div class="flex items-center space-x-2 text-indigo-800 font-bold mb-3">
+            <i class="fa-regular fa-calendar-check text-indigo-600"></i>
+            <h3>學校今日行事提示</h3>
+          </div>
+          <div id="calendarEventsList" class="text-sm text-slate-700 space-y-2">
+            <div class="bg-white/80 p-3 rounded-xl border border-indigo-100/60 text-xs">
+              查無全校重大行事，依正常課表作息。
+            </div>
+          </div>
+        </div>
+
+        <!-- 班費近期支出明細卡 -->
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+            <div class="flex items-center space-x-2">
+              <i class="fa-solid fa-file-invoice-dollar text-slate-600"></i>
+              <h2 class="text-base font-bold text-slate-900">班費收支最新明細</h2>
+            </div>
+          </div>
+          <div class="divide-y divide-slate-100 max-h-96 overflow-y-auto" id="expensesList">
+            <!-- 動態明細項目 -->
+          </div>
+          <div class="p-4 bg-slate-50 border-t border-slate-100 text-center">
+            <p class="text-xs text-slate-500">
+              <i class="fa-solid fa-camera mr-1"></i>在 LINE 傳送廠商明細相片即可自動辨識入帳
+            </p>
+          </div>
+        </div>
+
+        <!-- 快速功能指引 -->
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-3 text-xs text-slate-600">
+          <h4 class="font-bold text-slate-800 flex items-center">
+            <i class="fa-solid fa-wand-magic-sparkles text-indigo-500 mr-2"></i>LINE 指令小秘訣
+          </h4>
+          <ul class="space-y-1.5 list-disc pl-4 text-slate-500 leading-relaxed">
+            <li>回傳「<b class="text-slate-700">下班復盤</b>」：啟動 RDQ 3 題訪談，自動規劃明日各節待辦。</li>
+            <li>回傳「<b class="text-slate-700">今日行程</b>」：即時調閱當日課表與行事提醒。</li>
+            <li>回傳「<b class="text-slate-700">班費收支</b>」：查詢目前班費總結餘與收支狀況。</li>
+            <li>傳送「<b class="text-slate-700">發票/收據照片</b>」：AI 自動辨識金額、廠商、品項並記帳。</li>
+          </ul>
+        </div>
+
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- 頁尾 -->
+  <footer class="bg-white border-t border-slate-200 py-4 mt-auto">
+    <div class="max-w-7xl mx-auto px-4 text-center text-xs text-slate-400">
+      國小中年級導師 LINE 智慧助教系統 · Powered by Google Apps Script & Gemini 2.5 Flash
+    </div>
+  </footer>
+
+  <!-- 前端資料取得與渲染 Script -->
+  <script>
+    function refreshData() {
+      const dateBadge = document.getElementById('currentDateBadge');
+      dateBadge.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1.5"></i>更新中...';
+
+      google.script.run
+        .withSuccessHandler(renderDashboard)
+        .withFailureHandler(function(err) {
+          alert('取得資料失敗: ' + err);
+        })
+        .getDashboardData();
+    }
+
+    function renderDashboard(data) {
+      // 1. 日期標籤
+      const dateBadge = document.getElementById('currentDateBadge');
+      dateBadge.innerHTML = `<i class="fa-regular fa-calendar-days mr-1.5"></i>${data.today}（星期${data.dayZh}）`;
+
+      // 2. 統計卡
+      document.getElementById('statStudents').innerHTML = `${data.finance.studentCount} <span class="text-sm font-normal text-slate-500">人</span>`;
+      document.getElementById('statIncome').innerText = `$${data.finance.totalIncome.toLocaleString()}`;
+      document.getElementById('statExpense').innerText = `$${data.finance.totalExpense.toLocaleString()}`;
+      document.getElementById('statBalance').innerText = `$${data.finance.balance.toLocaleString()}`;
+      document.getElementById('statExpenseCount').innerText = `${data.recentExpenses.length} 筆收據核銷`;
+
+      const pct = data.finance.totalIncome > 0 ? (data.finance.balance / data.finance.totalIncome) * 100 : 100;
+      document.getElementById('balanceProgress').style.width = Math.max(0, Math.min(100, pct)) + '%';
+
+      // 3. 今日節次待辦
+      const planDiv = document.getElementById('todayPlanContent');
+      planDiv.innerText = data.todayPlan;
+
+      // 4. 今日課表
+      const scheduleBox = document.getElementById('scheduleTimeline');
+      scheduleBox.innerHTML = '';
+      if (data.schedule && data.schedule.length > 0) {
+        data.schedule.forEach(s => {
+          const isHome = s.type === '導師課';
+          scheduleBox.innerHTML += `
+            <div class="p-3 rounded-xl border ${isHome ? 'border-indigo-200 bg-indigo-50/40' : 'border-slate-200 bg-slate-50/60'}">
+              <span class="text-[10px] font-bold px-1.5 py-0.5 rounded ${isHome ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-600'}">${s.type}</span>
+              <h4 class="text-sm font-bold text-slate-800 mt-1">${s.subject}</h4>
+              <p class="text-xs text-slate-500 mt-0.5">${s.period}</p>
+            </div>
+          `;
+        });
+      }
+
+      // 5. 學校行事曆
+      const calBox = document.getElementById('calendarEventsList');
+      calBox.innerHTML = '';
+      if (data.calendarEvents && data.calendarEvents.length > 0) {
+        data.calendarEvents.forEach(ev => {
+          calBox.innerHTML += `
+            <div class="bg-white p-3 rounded-xl border border-indigo-200/80 text-xs shadow-xs flex items-center space-x-2">
+              <i class="fa-solid fa-bell text-indigo-500"></i>
+              <span class="font-medium text-slate-800">${ev}</span>
+            </div>
+          `;
+        });
+      } else {
+        calBox.innerHTML = '<div class="bg-white/80 p-3 rounded-xl border border-indigo-100/60 text-xs text-slate-500">今日無全校重大行事，照常教學。</div>';
+      }
+
+      // 6. 突發事件清單
+      const incBox = document.getElementById('incidentsList');
+      incBox.innerHTML = '';
+      if (data.recentIncidents && data.recentIncidents.length > 0) {
+        data.recentIncidents.forEach(inc => {
+          incBox.innerHTML += `
+            <div class="p-3.5 rounded-xl border border-slate-200 bg-slate-50/50 flex flex-col space-y-1">
+              <div class="flex justify-between items-center">
+                <div class="flex items-center space-x-2">
+                  <span class="px-2 py-0.5 rounded-md text-xs font-semibold bg-amber-100 text-amber-800">${inc.type}</span>
+                  <span class="text-xs font-bold text-slate-800">${inc.student}</span>
+                </div>
+                <span class="text-[11px] text-slate-400">${inc.time}</span>
+              </div>
+              <p class="text-xs text-slate-700 leading-relaxed">${inc.description}</p>
+            </div>
+          `;
+        });
+      } else {
+        incBox.innerHTML = '<p class="text-sm text-slate-400 py-4 text-center">暫無突發事件紀錄，班級秩序良好！</p>';
+      }
+
+      // 7. 班費收支明細
+      const expBox = document.getElementById('expensesList');
+      expBox.innerHTML = '';
+      if (data.recentExpenses && data.recentExpenses.length > 0) {
+        data.recentExpenses.forEach(exp => {
+          expBox.innerHTML += `
+            <div class="p-4 flex items-center justify-between hover:bg-slate-50 transition">
+              <div>
+                <div class="flex items-center space-x-2">
+                  <span class="text-xs font-bold text-slate-800">${exp.item}</span>
+                  <span class="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">${exp.category}</span>
+                </div>
+                <p class="text-xs text-slate-400 mt-0.5">${exp.date} · ${exp.vendor}</p>
+              </div>
+              <div class="text-right">
+                <span class="text-sm font-extrabold text-rose-600">-$${exp.amount.toLocaleString()}</span>
+              </div>
+            </div>
+          `;
+        });
+      } else {
+        expBox.innerHTML = '<div class="p-6 text-center text-xs text-slate-400">尚無核銷支出紀錄</div>';
+      }
+    }
+
+    // 初始化自動加載
+    window.onload = function() {
+      refreshData();
+    };
+  </script>
+</body>
+</html>

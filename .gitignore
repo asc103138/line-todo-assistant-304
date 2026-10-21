@@ -1,0 +1,18 @@
+# OS & Editor
+.DS_Store
+Thumbs.db
+*.swp
+*.bak
+*~
+
+# Temporary OCR & Parsing Cache
+timetable_ocr.txt
+timetable_gemini.txt
+timetable.png
+calendar.pdf
+
+# Secrets & Environment
+.env
+*.env
+credentials*.json
+*.key
