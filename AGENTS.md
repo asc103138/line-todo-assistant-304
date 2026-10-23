@@ -10,6 +10,11 @@
   - 📗 社會科：康軒版 4上
   - 🌊 校本課程：梧風啟航（梧棲海線在地情境：高美濕地、臺中港區、梧棲老街、九降風）
 - **主要工作目錄**：`/Users/tunyuan/Library/CloudStorage/GoogleDrive-asc103138@st.tc.edu.tw/我的雲端硬碟/line待辦事項`
+- **GitHub Repo**：`https://github.com/asc103138/line-todo-assistant-304`
+
+## Obsidian 關聯筆記
+- **Vault 路徑**：`/Users/tunyuan/opencode_0715`
+- **專案駕駛艙**：`/Users/tunyuan/opencode_0715/04-專案/line待辦事項-專案駕駛艙.md`
 
 ## 核心規範與安全規則
 - 回應使用繁體中文（台灣）。
