@@ -138,11 +138,17 @@ function handleIncomingMessage(event) {
   if (message.type === 'text') {
     const text = message.text.trim();
 
-    // 檢查是否處於 RDQ 訪談狀態機流程中
-    const rdqSession = getRDQSession(userId);
-    if (rdqSession && rdqSession.status === 'IN_PROGRESS') {
-      handleRDQStep(userId, text, replyToken);
-      return;
+    // 檢查是否處於主動式交談狀態機（06:30 晨間安排確認 或 20:00 晚間復盤）
+    const session = getSessionState(userId);
+    if (session) {
+      if (session.state === 'MORNING_PENDING') {
+        handleMorningConfirmation(userId, text, replyToken);
+        return;
+      }
+      if (session.state === 'EVENING_PENDING') {
+        handleEveningConfirmation(userId, text, replyToken);
+        return;
+      }
     }
 
     // 圖文選單與關鍵字分流
@@ -155,7 +161,13 @@ function handleIncomingMessage(event) {
       case '下班復盤':
       case '下班RDQ':
       case '開始復盤':
-        startRDQSession(userId, replyToken);
+      case '晚間復盤':
+        triggerEveningInteractiveReview(userId, replyToken);
+        break;
+
+      case '晨間安排':
+      case '晨間建議':
+        sendMorningInteractiveBriefing();
         break;
 
       case '班費收支':
@@ -176,16 +188,21 @@ function handleIncomingMessage(event) {
       case '個人儀表板':
       case '開啟儀表板':
         const webAppUrl = ScriptApp.getService().getUrl();
-        replyTextMessage(replyToken, `📊 點擊下方連結開啟您的「導師個人儀表板」：\n\n${webAppUrl}\n\n（可隨時查看班費動態、今日各節待辦與突發事件時間軸）`);
+        replyTextMessage(replyToken, `📊 點擊下方連結開啟您的「導師個人儀表板」：
+
+${webAppUrl}
+
+（可隨時查看班費動態、今日各節待辦與突發事件時間軸）`);
         break;
 
+      case '重置狀態':
       case '重置復盤':
-        clearRDQSession(userId);
-        replyTextMessage(replyToken, '已重置今日 RDQ 訪談狀態。隨時回傳「下班復盤」即可重新開始！');
+        clearSessionState(userId);
+        replyTextMessage(replyToken, '已重置當前對話狀態。隨時回傳「今日行程」或「下班復盤」即可啟動！');
         break;
 
       default:
-        // 若為一般自然語言，交由 Gemini 分析意圖（是突發事件記錄、代辦隨手記、還是知識諮詢）
+        // 若為一般自然語言，交由 Gemini 分析意圖（是臨時交辦、突發事件、還是教學諮詢）
         handleNaturalLanguageQuery(text, replyToken, userId);
         break;
     }
@@ -275,152 +292,23 @@ function processImageWithGemini(messageId, userId) {
   }
 }
 
-// ======================== 【RDQ 下班復盤訪談引擎 (State Machine)】 ========================
+// ======================== 【主動式智慧助教：06:30 晨間建議 ＆ 20:00 晚間復盤】 ========================
 
 /**
- * 啟動 RDQ 訪談狀態
+ * 每日 06:30 晨間推播：結合今日課表、行事曆與昨夜復盤，主動提出 3 個安排方案供導師點選與確認臨時交辦
  */
-function startRDQSession(userId, replyToken) {
-  const ss = getSpreadsheet();
-  const sheet = getOrCreateSheet(ss, CONFIG.SHEETS.RDQ_STATE, ['UserId', 'Step', 'AnswersJSON', 'UpdatedAt']);
-  
-  // 記錄初始 Step 1
-  const initialData = {
-    step: 1,
-    answers: { q1: '', q2: '', q3: '' }
-  };
-  saveRDQSession(userId, 1, initialData.answers);
-
-  const welcomeText = `☕ 老師辛苦了！進入今日下班 RDQ 復盤訪談（共 3 題，約 1 分鐘）。\n` +
-    `這些資訊將結合「明日課表與行事曆」，為您量身打造明日從早自習到第七節的專屬待辦清單！\n\n` +
-    `【第 1 題｜象限Ⅰ·今日教學進度】\n` +
-    `請問今天各節課與班級常規進行得如何？是否有哪一堂課進度落後、或明天需要補上/檢討的？\n\n` +
-    `（直接傳文字回答，若都順利可直接回「正常」）`;
-
-  replyTextMessage(replyToken, welcomeText);
-}
-
-/**
- * 處理 RDQ 每一步驟回答
- */
-function handleRDQStep(userId, answerText, replyToken) {
-  const session = getRDQSession(userId);
-  if (!session) return;
-
-  const step = session.step;
-  const answers = session.answers;
-
-  if (step === 1) {
-    answers.q1 = answerText;
-    saveRDQSession(userId, 2, answers);
-    const q2Text = `收到！\n\n` +
-      `【第 2 題｜象限Ⅲ·學生狀況與親師】\n` +
-      `今天班上有沒有學生突發事件（如受傷、常規衝突、情緒障礙），或有家長需要今晚/明日聯繫說明的？\n\n` +
-      `（若無特殊狀況可直接回「無」）`;
-    replyTextMessage(replyToken, q2Text);
-
-  } else if (step === 2) {
-    answers.q2 = answerText;
-    saveRDQSession(userId, 3, answers);
-    const q3Text = `記錄下來了。\n\n` +
-      `【第 3 題｜象限Ⅳ·明日行政與作業】\n` +
-      `明天早自修預計收什麼作業？有沒有學校處室交辦的行政表格或活動需要繳交？\n\n` +
-      `（例如：「收國隨、發健康檢查通知單」，若已在行事曆中可回「照行事曆」）`;
-    replyTextMessage(replyToken, q3Text);
-
-  } else if (step === 3) {
-    answers.q3 = answerText;
-    saveRDQSession(userId, 4, answers); // 訪談完成
-    replyTextMessage(replyToken, `✨ 訪談完成！Gemini 正在為您綜合「今日狀況 + 明日課表 + 學校行事曆」，生成明日每節課客製化待辦清單，請稍後約 5 秒...`);
-
-    // 異步生成明日待辦
-    generateTomorrowSchedulePlan(userId, answers);
-    clearRDQSession(userId);
-  }
-}
-
-/**
- * 結合課表與行事曆，透過 Gemini 生成明日各節課待辦與備課建議
- */
-function generateTomorrowSchedulePlan(userId, rdqAnswers) {
-  try {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const tomorrowStr = Utilities.formatDate(tomorrow, 'GMT+8', 'yyyy-MM-dd');
-    const dayOfWeek = getDayOfWeekZh(tomorrow.getDay());
-
-    // 1. 抓取明日課表
-    const scheduleData = getScheduleByDay(dayOfWeek);
-    // 2. 抓取明日學校行事曆
-    const calendarEvents = getCalendarEvents(tomorrowStr);
-
-    const prompt = `你是一名專門支援【臺中市梧棲區中正國民小學 四年丙班 (304班)】的資深教學教務顧問。
-你必須嚴格遵守【G4 Curriculum Review 全域三階漏斗審查規範】，嚴禁憑空捏造未教進度或混淆版本：
-
-【核心教科書版本鎖定（嚴禁跨版本混用）】：
-- 📘 數學科：南一版 4上（南一數：單元一～五：一億以內的數、乘法、角度、除法、三角形與四邊形）
-- 📙 國語科：翰林版 4上（翰林國：第一單元秋天美作/水中精靈、第二單元攀爬夢想/月光下/走過歷史痕跡）
-- 📗 社會科：康軒版 4上（康軒社：單元一家鄉在哪裡與地圖、單元二家鄉的環境與生活）
-- 🌊 校本彈性：梧風啟航（結合梧棲海線、臺中港區、高美濕地、九降風海風文化）
-
-【學校重大日程與進度脈絡】：
-- 11/05(四)-11/06(五) 為中正國小第一次定期評量（期中考）。所有教學待辦應結合目前的教學、作業訂正與期中複習節奏！
-
-【今日導師下班 RDQ 復盤回報】：
-1. 今日進度與落後補救：${rdqAnswers.q1}
-2. 學生狀況與親師待辦：${rdqAnswers.q2}
-3. 明日作業收取與行政交代：${rdqAnswers.q3}
-
-【明日課表節次】：
-${JSON.stringify(scheduleData, null, 2)}
-
-【明日學校行事曆重大事項】：
-${calendarEvents.length > 0 ? calendarEvents.join('、') : '常規教學日，無全校性重大集會'}
-
-【審查與生成規範】：
-1. 嚴格符合四年級學生先備經驗與指定版本單元，切勿提及五年級或非本版本之內容。
-2. 針對「導師課」（國語、數學、社會、綜合、梧風啟航）依老師回報進度提供具體的單元教學、作業收取、落後補救或課堂分組任務。
-3. 針對「科任課」（自然、體育、美勞、英文、電腦、音樂、健康）給予帶隊集合、攜帶用具（如泳裝、美勞用具、英文課本）叮嚀。
-4. 若明日是半天課（週一、週三），提醒 12:00 放學路隊；若全天課，規劃午餐午休秩序與 15:50 放學。
-5. 若今日 RDQ 提及學生突發或家長需聯繫，務必於特定下課空檔明確標註追蹤。
-6. 請輸出結構分明、親切具體的繁體中文節次清單。`;
-
-    const plan = callGeminiText(prompt);
-
-    // 寫入「每日待辦」分頁
-    saveTomorrowPlanToSheet(tomorrowStr, dayOfWeek, plan);
-
-    const message = `📋 【明日（${tomorrowStr} 週${dayOfWeek}）各節課待辦與建議】\n` +
-      `━━━━━━━━━━━━━━\n` +
-      plan +
-      `\n━━━━━━━━━━━━━━\n` +
-      `💡 此清單已同步儲存至試算表與個人儀表板。明早 07:00 會再次發送重點摘要！`;
-
-    pushMessage(userId, message);
-
-  } catch (err) {
-    console.error('生成明日清單錯誤: ' + err.toString());
-    pushMessage(userId, '⚠️ 生成明日待辦時發生問題，請稍後至儀表板手動檢視。');
-  }
-}
-
-// ======================== 【定時排程推播：早晨 07:00 與 下班 17:00】 ========================
-
-/**
- * 每日 07:00 晨間推播當日行程建議
- */
-function sendMorningBriefing() {
+function sendMorningInteractiveBriefing() {
   const teacherId = CONFIG.TEACHER_USER_ID;
   if (!teacherId) {
-    console.warn('尚未記錄導師 User ID，無法發送晨間推播。');
+    console.warn('尚未記錄導師 User ID，無法發送 06:30 晨間推播。');
     return;
   }
 
   const today = new Date();
   const dayOfWeek = today.getDay();
-  // 週末不推播
+  // 週末不上課
   if (dayOfWeek === 0 || dayOfWeek === 6) {
-    console.info('週末不上課，跳過晨間推播。');
+    console.info('週末不上課，跳過 06:30 晨間推播。');
     return;
   }
 
@@ -428,72 +316,273 @@ function sendMorningBriefing() {
   const dayZh = getDayOfWeekZh(dayOfWeek);
   const schedule = getScheduleByDay(dayZh);
   const calendarEvents = getCalendarEvents(todayStr);
-  const savedPlan = getSavedPlan(todayStr);
-
+  const yesterdayPlan = getSavedPlan(todayStr); // 昨日 20:00 復盤為今日規劃之初步基底
   const uniformNote = CONFIG.UNIFORMS[dayZh] || '便服';
-  let msg = `☀️ 老師早安！今天是 ${todayStr} 星期${dayZh}（${CONFIG.CLASS_NAME}）\n` +
-    `━━━━━━━━━━━━━━\n` +
-    `👗 今日服裝提醒：${uniformNote}\n` +
-    `📌 【今日學校行事】：${calendarEvents.length > 0 ? calendarEvents.join('、') : '無全校性重大事項'}\n\n` +
-    `📖 【今日課程節次】：\n`;
 
-  if (schedule && schedule.length > 0) {
-    schedule.forEach(item => {
-      msg += `▫️ ${item.period}：${item.subject} (${item.type})\n`;
-    });
-  } else {
-    msg += `（尚未填入週${dayZh}課表，可在試算表中設定）\n`;
-  }
+  const prompt = `你是一名專屬支援【臺中市梧棲區中正國民小學 四年丙班 (304班)】的專業教務智慧助教。
+你必須嚴格遵守【G4 Curriculum Review 全域三階漏斗審查規範】：
+- 教科書版本：南一數學 4上、翰林國語 4上、康軒社會 4上、校本彈性梧風啟航
+- 學校重大期程：11/05-11/06 第一次定期評量（期中考）
+- 在地情境：臺中港區、梧棲漁港、高美濕地、九降風海風文化
 
-  if (savedPlan) {
-    msg += `\n📋 【昨日規劃之重點待辦】：\n${savedPlan.substring(0, 300)}...\n\n👉 完整各節次規劃請回傳「今日行程」或開啟儀表板檢視！祝今天教學順心！`;
-  } else {
-    msg += `\n祝您今天教學充實順利！`;
-  }
+今天是 ${todayStr} 星期${dayZh}。
+服裝與放學規定：${uniformNote}
+今日課表節次：
+${JSON.stringify(schedule, null, 2)}
+今日學校重大行事：${calendarEvents.length > 0 ? calendarEvents.join('、') : '常規教學日，無全校重大集會'}
+昨晚 20:00 復盤產出之初步規劃基底：
+${yesterdayPlan || '無前置待辦記錄，按表操課'}
 
-  pushMessage(teacherId, msg);
+【重要核心要求】：
+導師要的不是空泛問句，而是主動提供具體安排建議供他選擇！
+請依據教科書版本單元進度與今日作息，主動推論並生成【3 個具體的今日課程安排與待辦建議方案】：
+
+【方案 A：穩健進度版 (照原排定)】
+- 針對今日導師課（國/數/社/綜合）說明具體教學重點，科任課列出帶隊與必備用具叮嚀。
+
+【方案 B：強化複習與補救版】
+- 針對近期易混淆迷思（如除法補零、角度內角和、國語形深理解），利用早自修或綜合課抽空 15 分鐘加強補救，微調今日節奏。
+
+【方案 C：行政活動與彈性版】
+- 針對處室收件、全校集會或校外活動預留收件/檢查時間，適度精簡主科作業份量。
+
+請輸出結構清晰、語氣專業溫暖的繁體中文，格式包含：
+1. ☀️ 今日概覽（課表重點 + 服裝提醒）
+2. 提案建議【方案 A】、【方案 B】、【方案 C】核心重點條列
+3. 提示導師：「請直接點選下方按鈕回傳 A、B、C 確認，或直接打字/語音補充您今日的臨時交辦事項！」`;
+
+  const proposalText = callGeminiText(prompt);
+
+  saveSessionState(teacherId, 'MORNING_PENDING', {
+    date: todayStr,
+    dayZh: dayZh,
+    proposal: proposalText
+  });
+
+  const quickReplies = [
+    { label: '✅ 採納方案 A', text: '方案A' },
+    { label: '📘 採納方案 B', text: '方案B' },
+    { label: '📋 採納方案 C', text: '方案C' },
+    { label: '➕ 補充臨時交辦', text: '臨時交辦：' }
+  ];
+
+  pushMessageWithQuickReply(teacherId, `☀️ 【06:30 晨間課程安排與主動建議】
+━━━━━━━━━━━━━━
+${proposalText}`, quickReplies);
 }
 
 /**
- * 每日 17:00 傍晚下班推播觸發 RDQ 復盤
+ * 處理導師對 06:30 晨間建議的確認與臨時交辦
  */
-function triggerEveningRDQ() {
-  const teacherId = CONFIG.TEACHER_USER_ID;
+function handleMorningConfirmation(userId, text, replyToken) {
+  const session = getSessionState(userId);
+  const today = new Date();
+  const todayStr = Utilities.formatDate(today, 'GMT+8', 'yyyy-MM-dd');
+  const dayZh = getDayOfWeekZh(today.getDay());
+
+  const prompt = `你是一名【臺中市梧棲區中正國小 304 班】智慧助教。
+今晨系統提供給導師的提案建議如下：
+${session ? session.data.proposal : '常規建議'}
+
+導師的回覆為：「${text}」
+
+請根據導師的選擇（如選方案A、B、C）以及是否有補充的【臨時交辦事項/客製微調】：
+1. 整合為今日最終執行的【早自修至第七節 課表待辦與臨時交辦總清單】。
+2. 清楚標明：
+   - 📌 今日確認採用方案
+   - ⚡ 臨時交辦/特別提醒事項（若有）
+   - ⏰ 早自修至第七節課堂執行重點
+請以精簡親切、條列明確的繁體中文輸出：`;
+
+  const finalPlan = callGeminiText(prompt);
+
+  saveTomorrowPlanToSheet(todayStr, dayZh, finalPlan);
+  clearSessionState(userId);
+
+  replyTextMessage(replyToken, `✅ 【今日課程安排與交辦已正式鎖定】
+━━━━━━━━━━━━━━
+${finalPlan}
+━━━━━━━━━━━━━━
+💡 已同步更新至個人儀表板。今晚 20:00 我會主動為您發送今日復盤診斷與明日行程建議！祝老師今天教學愉快順心！`);
+}
+
+/**
+ * 每日 20:00 晚間推播：主動提供今日復盤診斷選項，並規劃明日行程
+ */
+function triggerEveningInteractiveReview(targetUserId, replyToken) {
+  const teacherId = targetUserId || CONFIG.TEACHER_USER_ID;
   if (!teacherId) return;
 
   const today = new Date();
   const dayOfWeek = today.getDay();
-  if (dayOfWeek === 0 || dayOfWeek === 6) return;
+  if (dayOfWeek === 0 || dayOfWeek === 6) {
+    const msg = '☕ 週末放假好好休息！週日晚間 20:00 我會自動為您梳理週一的課程與行事建議！';
+    if (replyToken) replyTextMessage(replyToken, msg);
+    return;
+  }
 
-  const msg = `🔔 叮咚！放學囉，老師今天辛苦了！\n\n` +
-    `為了讓明天的教學與班級經營從容不迫，現在花 1 分鐘進行「下班 RDQ 復盤」吧！\n\n` +
-    `👉 回傳「開始復盤」或點選下方選單【下班RDQ】，我會即刻引導您並自動排定明日早修至第七節的待辦建議！`;
+  const todayStr = Utilities.formatDate(today, 'GMT+8', 'yyyy-MM-dd');
+  const dayZh = getDayOfWeekZh(dayOfWeek);
+  const todaySchedule = getScheduleByDay(dayZh);
+  const todayPlan = getSavedPlan(todayStr) || '今日照常規課表進行';
 
-  pushMessage(teacherId, msg);
+  // 明日資訊
+  const tomorrow = new Date();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = Utilities.formatDate(tomorrow, 'GMT+8', 'yyyy-MM-dd');
+  const tomorrowDayZh = getDayOfWeekZh(tomorrow.getDay());
+  const tomorrowSchedule = getScheduleByDay(tomorrowDayZh);
+  const tomorrowCalendar = getCalendarEvents(tomorrowStr);
+  const tomorrowUniform = CONFIG.UNIFORMS[tomorrowDayZh] || '便服';
+
+  // 今日突發事件
+  const recentIncidents = getRecentIncidents(todayStr);
+
+  const prompt = `你是一名【臺中市梧棲區中正國小 四年丙班 (304班)】的資深教學助教。
+現在是晚間 20:00 復盤時間。
+【今日回顧】：
+- 今日（${todayStr} 週${dayZh}）課表：${JSON.stringify(todaySchedule)}
+- 今晨確認之待辦與交辦：${todayPlan}
+- 今日記錄之突發事件：${recentIncidents.length > 0 ? recentIncidents.join('；') : '無特殊突發紀錄，常規良好'}
+
+【明日展望】：
+- 明日（${tomorrowStr} 週${tomorrowDayZh}）課表：${JSON.stringify(tomorrowSchedule)}
+- 明日學校重大行事：${tomorrowCalendar.length > 0 ? tomorrowCalendar.join('、') : '常規教學日'}
+- 明日學生服裝與放學：${tomorrowUniform}
+
+【核心任務要求】：
+不要叫老師從零打字填空！請根據今日實際課程期程（南一數 4上、翰林國 4上、康軒社 4上、校本梧風啟航）與明日行程，主動給出【3 個今日復盤診斷與明日銜接建議選項】，讓老師一鍵點選或微調：
+
+【選項 1：進度全達標·明日銜接】
+- 今日課程與交辦全數順利完成，明日各節課按表推進下一單元，放學路隊與作業交代順暢。
+
+【選項 2：重點需補救·明日微調】
+- 針對今日較易卡關的概念（如數學除法/三角形、國語形深理解），建議明日早自修或課堂調配 15 分鐘重點補救，微調明日課堂節奏。
+
+【選項 3：常規/親師/交辦追蹤】
+- 今日若有突發事件或處室收件未完，明日特定空檔安排個別關懷、追蹤或收齊。
+
+請輸出結構清晰、文字親切的繁體中文，列出 3 個診斷選項，並提示老師：「請直接點選下方按鈕或回傳 1、2、3，亦可直接輸入您的補充或想法，我將直接為您排定明日早自修至第七節的客製待辦！」`;
+
+  const reviewProposal = callGeminiText(prompt);
+
+  saveSessionState(teacherId, 'EVENING_PENDING', {
+    todayStr: todayStr,
+    tomorrowStr: tomorrowStr,
+    tomorrowDayZh: tomorrowDayZh,
+    tomorrowSchedule: tomorrowSchedule,
+    tomorrowCalendar: tomorrowCalendar,
+    tomorrowUniform: tomorrowUniform,
+    proposal: reviewProposal
+  });
+
+  const quickReplies = [
+    { label: '1️⃣ 進度全達標', text: '選項1' },
+    { label: '2️⃣ 重點需補救', text: '選項2' },
+    { label: '3️⃣ 親師學生追蹤', text: '選項3' },
+    { label: '✏️ 補充說明', text: '補充復盤：' }
+  ];
+
+  const msgText = `🌙 【20:00 晚間復盤與明日行程建議】
+━━━━━━━━━━━━━━
+${reviewProposal}`;
+
+  if (replyToken) {
+    replyTextMessageWithQuickReply(replyToken, msgText, quickReplies);
+  } else {
+    pushMessageWithQuickReply(teacherId, msgText, quickReplies);
+  }
+}
+
+/**
+ * 處理導師對 20:00 晚間復盤的選擇，並排定明日早自修至第七節待辦
+ */
+function handleEveningConfirmation(userId, text, replyToken) {
+  const session = getSessionState(userId);
+  const data = session ? session.data : {};
+  
+  const tomorrowStr = data.tomorrowStr || Utilities.formatDate(new Date(Date.now() + 86400000), 'GMT+8', 'yyyy-MM-dd');
+  const tomorrowDayZh = data.tomorrowDayZh || getDayOfWeekZh(new Date(Date.now() + 86400000).getDay());
+  const tomorrowSchedule = data.tomorrowSchedule || getScheduleByDay(tomorrowDayZh);
+  const tomorrowCalendar = data.tomorrowCalendar || getCalendarEvents(tomorrowStr);
+  const tomorrowUniform = data.tomorrowUniform || (CONFIG.UNIFORMS[tomorrowDayZh] || '便服');
+
+  const prompt = `你是一名專屬支援【臺中市梧棲區中正國小 四年丙班 (304班)】的專業教務助教。
+在晚間 20:00 復盤中，導師做出的選擇與回饋為：「${text}」
+參考原提案：
+${data.proposal || ''}
+
+明日資訊：
+- 日期：${tomorrowStr} 星期${tomorrowDayZh}（${tomorrowUniform}）
+- 課表節次：${JSON.stringify(tomorrowSchedule)}
+- 學校重大行事：${tomorrowCalendar.length > 0 ? tomorrowCalendar.join('、') : '常規教學日'}
+
+【任務要求】：
+請根據導師的復盤選擇與反饋，嚴格遵守南一數、翰林國、康軒社、校本梧風啟航之進度，為導師完整產出【明日（${tomorrowStr} 週${tomorrowDayZh}）早自修至第七節 客製化教學待辦與備課清單】：
+- ☀️ 早自修 (07:50-08:40)：聯絡簿、作業收取、晨讀或導師補救交代
+- 📘 第一節課至第七節課：每一節課的具體教學重點（導師課）或帶隊叮嚀（科任課）
+- 🍱 午餐與午休 / 🎒 放學時間與路隊
+- 💡 特別提醒（今日導師交辦之追蹤）
+
+請輸出結構清晰、充滿溫度且可以直接執行的繁體中文清單：`;
+
+  const tomorrowPlan = callGeminiText(prompt);
+
+  saveTomorrowPlanToSheet(tomorrowStr, tomorrowDayZh, tomorrowPlan);
+  clearSessionState(userId);
+
+  replyTextMessage(replyToken, `📋 【明日（${tomorrowStr} 週${tomorrowDayZh}）各節次待辦與建議已排定】
+━━━━━━━━━━━━━━
+${tomorrowPlan}
+━━━━━━━━━━━━━━
+💡 此規劃已同步至試算表與個人儀表板。明晨 06:30 會主動為您發送晨間確認！祝老師今晚好眠！`);
+}
+
+// 相容舊函式
+function sendMorningBriefing() {
+  sendMorningInteractiveBriefing();
+}
+
+function triggerEveningRDQ() {
+  triggerEveningInteractiveReview();
 }
 
 // ======================== 【突發事件與自然語言處理】 ========================
 
 function handleNaturalLanguageQuery(text, replyToken, userId) {
-  const prompt = `你是一名溫暖有經驗的國小中年級導師 AI 助理。
-導師傳送了一段訊息：「${text}」
+  const prompt = `你是一名溫暖且精準的國小四年級導師 AI 智慧助理（支援臺中梧棲中正國小 304 班）。
+導師傳送了一段自然語言訊息：「${text}」
 
-請分析此訊息是否屬於【學生突發事件/親師爭議/受傷衝突】：
-1. 若是突發事件：
-   - 請提供：事件摘要、建議當下應對步驟（合乎台灣國小法規與輔導管教規範）、一則給家長的親師溝通 LINE 簡訊草稿（語氣同理、客觀正向）。
-   - 請在回應最末行加上標記：[SAVE_INCIDENT:{"student":"","type":"衝突/受傷/課業/常規","description":"摘要"}]
-2. 若非突發事件，只是隨手筆記或一般詢問：
-   - 請給予親切而精簡的國小教學支持回覆。
+請分析此訊息之意圖：
+1. 若屬於【臨時交辦 / 待辦備忘 / 行程微調】（如：「中午要交教學省思」、「第3節要加發校慶通知」、「明天第一節收國隨」）：
+   - 請輸出標記：[SAVE_TODO:{"task":"具體待辦內容","period":"時間或節次"}]
+   - 同時輸出簡短確認回覆，告訴導師已排入待辦清單。
+2. 若屬於【學生突發事件 / 受傷 / 常規衝突 / 親師爭議】：
+   - 請提供：事件摘要、當下應對步驟、一則親師溝通 LINE 簡訊草稿（語氣同理、正向客觀）。
+   - 請輸出標記：[SAVE_INCIDENT:{"student":"","type":"衝突/受傷/課業/常規","description":"摘要"}]
+3. 若非上述，只是隨手筆記或一般教育教學詢問：
+   - 請給予精簡、溫暖且切合國小教育專業之回覆。
 
 請直接繁體中文回答：`;
 
   const aiReply = callGeminiText(prompt);
 
-  // 檢查是否需要自動儲存學生突發事件
-  const match = aiReply.match(/\[SAVE_INCIDENT:(.*?)\]/);
-  if (match && match[1]) {
+  // 1. 處理臨時交辦追加
+  const todoMatch = aiReply.match(/\[SAVE_TODO:(.*?)\]/);
+  if (todoMatch && todoMatch[1]) {
     try {
-      const inc = JSON.parse(match[1]);
+      const todoObj = JSON.parse(todoMatch[1]);
+      appendAdhocTaskToToday(todoObj.task, todoObj.period);
+    } catch (e) {
+      console.warn('解析臨時交辦失敗: ' + e);
+    }
+  }
+
+  // 2. 處理突發事件記錄
+  const incMatch = aiReply.match(/\[SAVE_INCIDENT:(.*?)\]/);
+  if (incMatch && incMatch[1]) {
+    try {
+      const inc = JSON.parse(incMatch[1]);
       saveIncidentRecord({
         date: Utilities.formatDate(new Date(), 'GMT+8', 'yyyy-MM-dd HH:mm'),
         student: inc.student || '班級學生',
@@ -506,8 +595,24 @@ function handleNaturalLanguageQuery(text, replyToken, userId) {
     }
   }
 
-  const cleanReply = aiReply.replace(/\[SAVE_INCIDENT:.*?\]/g, '').trim();
+  const cleanReply = aiReply.replace(/\[SAVE_TODO:.*?\]/g, '').replace(/\[SAVE_INCIDENT:.*?\]/g, '').trim();
   replyTextMessage(replyToken, cleanReply);
+}
+
+/**
+ * 將白天臨時交辦追加至今日待辦
+ */
+function appendAdhocTaskToToday(taskText, period) {
+  const today = new Date();
+  const todayStr = Utilities.formatDate(today, 'GMT+8', 'yyyy-MM-dd');
+  const dayZh = getDayOfWeekZh(today.getDay());
+  
+  let currentPlan = getSavedPlan(todayStr) || '';
+  const addition = `
+⚡ 【臨時交辦 (${period || '今日'})】：${taskText}`;
+  currentPlan += addition;
+  
+  saveTomorrowPlanToSheet(todayStr, dayZh, currentPlan);
 }
 
 // ======================== 【班費收支與帳簿計算】 ========================
@@ -841,12 +946,57 @@ function replyTextMessage(replyToken, text) {
   callLineApi(url, payload);
 }
 
+function replyTextMessageWithQuickReply(replyToken, text, quickReplies) {
+  const url = 'https://api.line.me/v2/bot/message/reply';
+  const payload = {
+    replyToken: replyToken,
+    messages: [{
+      type: 'text',
+      text: text,
+      quickReply: {
+        items: quickReplies.map(item => ({
+          type: 'action',
+          action: {
+            type: 'message',
+            label: item.label,
+            text: item.text
+          }
+        }))
+      }
+    }]
+  };
+  callLineApi(url, payload);
+}
+
 function pushMessage(toUserId, text) {
   if (!toUserId) return;
   const url = 'https://api.line.me/v2/bot/message/push';
   const payload = {
     to: toUserId,
     messages: [{ type: 'text', text: text }]
+  };
+  callLineApi(url, payload);
+}
+
+function pushMessageWithQuickReply(toUserId, text, quickReplies) {
+  if (!toUserId) return;
+  const url = 'https://api.line.me/v2/bot/message/push';
+  const payload = {
+    to: toUserId,
+    messages: [{
+      type: 'text',
+      text: text,
+      quickReply: {
+        items: quickReplies.map(item => ({
+          type: 'action',
+          action: {
+            type: 'message',
+            label: item.label,
+            text: item.text
+          }
+        }))
+      }
+    }]
   };
   callLineApi(url, payload);
 }
@@ -884,9 +1034,9 @@ function callLineApi(url, payload) {
   console.log(`LINE API 回應代碼 [${res.getResponseCode()}]: ${res.getContentText()}`);
 }
 
-// ======================== 【RDQ 暫存資料管理】 ========================
+// ======================== 【對話狀態機與暫存管理】 ========================
 
-function getRDQSession(userId) {
+function getSessionState(userId) {
   const ss = getSpreadsheet();
   const sheet = ss.getSheetByName(CONFIG.SHEETS.RDQ_STATE);
   if (!sheet || sheet.getLastRow() <= 1) return null;
@@ -895,30 +1045,30 @@ function getRDQSession(userId) {
   for (let i = 1; i < data.length; i++) {
     if (data[i][0] === userId) {
       return {
-        step: Number(data[i][1]),
-        answers: JSON.parse(data[i][2] || '{}'),
-        status: Number(data[i][1]) < 4 ? 'IN_PROGRESS' : 'COMPLETED'
+        state: String(data[i][1]),
+        data: JSON.parse(data[i][2] || '{}'),
+        updatedAt: data[i][3]
       };
     }
   }
   return null;
 }
 
-function saveRDQSession(userId, step, answers) {
+function saveSessionState(userId, state, stateData) {
   const ss = getSpreadsheet();
-  const sheet = getOrCreateSheet(ss, CONFIG.SHEETS.RDQ_STATE, ['UserId', 'Step', 'AnswersJSON', 'UpdatedAt']);
+  const sheet = getOrCreateSheet(ss, CONFIG.SHEETS.RDQ_STATE, ['UserId', 'State', 'DataJSON', 'UpdatedAt']);
   const data = sheet.getDataRange().getValues();
   
   for (let i = 1; i < data.length; i++) {
     if (data[i][0] === userId) {
-      sheet.getRange(i + 1, 2, 1, 3).setValues([[step, JSON.stringify(answers), new Date()]]);
+      sheet.getRange(i + 1, 2, 1, 3).setValues([[state, JSON.stringify(stateData), new Date()]]);
       return;
     }
   }
-  sheet.appendRow([userId, step, JSON.stringify(answers), new Date()]);
+  sheet.appendRow([userId, state, JSON.stringify(stateData), new Date()]);
 }
 
-function clearRDQSession(userId) {
+function clearSessionState(userId) {
   const ss = getSpreadsheet();
   const sheet = ss.getSheetByName(CONFIG.SHEETS.RDQ_STATE);
   if (!sheet || sheet.getLastRow() <= 1) return;
@@ -929,6 +1079,22 @@ function clearRDQSession(userId) {
       return;
     }
   }
+}
+
+function getRecentIncidents(dateStr) {
+  const ss = getSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.SHEETS.INCIDENTS);
+  if (!sheet || sheet.getLastRow() <= 1) return [];
+  const data = sheet.getDataRange().getValues();
+  const incidents = [];
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const rowDate = Utilities.formatDate(new Date(row[0]), 'GMT+8', 'yyyy-MM-dd');
+    if (rowDate === dateStr) {
+      incidents.push(`[${row[2] || '事件'}] ${row[1] || '學生'}：${row[3] || ''}`);
+    }
+  }
+  return incidents;
 }
 
 // ======================== 【試算表 Helper 工具】 ========================
