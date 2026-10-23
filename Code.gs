@@ -25,7 +25,7 @@ const CONFIG = {
   
   // Google Gemini API Key (https://aistudio.google.com/app/apikey)
   GEMINI_API_KEY: SCRIPT_PROPERTIES.getProperty('GEMINI_API_KEY') || 'YOUR_GEMINI_API_KEY',
-  GEMINI_MODEL: 'gemini-3.8-flash', // 最新穩定模型
+  GEMINI_MODEL: SCRIPT_PROPERTIES.getProperty('GEMINI_MODEL') || 'gemini-2.5-flash', // 預設使用 gemini-2.5-flash (備援 gemini-1.5-flash)
 
   // 班級基本設定 (RDQ 訪談確認值：28人，每人300元)
   STUDENT_COUNT: 28,
@@ -204,6 +204,10 @@ function handleIncomingMessage(event) {
       // 只有在非頂層指令時，才檢查是否處於待確認狀態
       const session = getSessionState(userId);
       if (session) {
+        if (session.state === 'EVENING_STEP_BY_STEP') {
+          handleStepByStepReviewReply(userId, text, replyToken);
+          return;
+        }
         if (session.state === 'MORNING_PENDING') {
           handleMorningConfirmation(userId, text, replyToken);
           return;
@@ -506,7 +510,231 @@ ${finalPlan}
 }
 
 /**
- * 每日 20:00 晚間推播：主動提供今日復盤診斷選項，並規劃明日行程
+ * 判斷該節課是否為導師親授科目
+ * 依使用者規範：只要是 國、數、社、綜合、電腦、梧風起航（含晨讀、早自修）即為導師課
+ * 其他科目（自然、體育、音樂、美勞、英文、健康、本土語等）均為科任課
+ */
+function isHomeroomSubject(subject) {
+  if (!subject) return false;
+  const s = String(subject).trim();
+  const homeroomList = ['國', '數', '社', '綜合', '電腦', '資訊', '梧風', '晨讀', '早自修'];
+  return homeroomList.some(h => s.includes(h));
+}
+
+/**
+ * 依節次與科目生成單節復盤卡片
+ * - 導師課（國數社綜合電腦梧風）：給出三種切合真實教材進度之教學建議
+ * - 科任課（其他所有科目）：不給教學建議，轉為【導師空白時間・空堂備課待辦】
+ */
+function getPeriodReviewCard(periodItem, index, total, targetDayZh, targetDateStr) {
+  const periodName = periodItem.period || `第${index + 1}節`;
+  const subject = periodItem.subject || '課程';
+  const isHomeroom = isHomeroomSubject(subject);
+
+  if (!isHomeroom) {
+    // 【科任課・導師空白時間】
+    const title = `☕ 【第 ${index + 1}/${total} 節：${periodName} - ${subject}（科任課・導師空白時間）】`;
+    const desc = `🔔 此節為科任課，導師享有 40 分鐘空堂備課時間！\n建議可利用此段空白時間處理以下班務待辦：\n\n` +
+      `[A] 批閱作業：批改今日數習、生字簿或隨堂演練，標記學生錯題\n` +
+      `[B] 班務親師：整理班費發票收據自動記帳、聯繫個別學生家長\n` +
+      `[C] 備課印卷：準備下一節教材教具、列印期中考雙向細目複習卷\n\n` +
+      `👉 請點選建議，或直接輸入自訂待辦事項：`;
+
+    return {
+      isHomeroom: false,
+      periodName: periodName,
+      subject: subject,
+      title: title,
+      fullText: `${title}\n━━━━━━━━━━━━━━\n${desc}`,
+      options: {
+        'A': '批閱作業（數習、生字簿、隨堂演練批改與錯題標記）',
+        'B': '班務親師（整理班費單據記帳、聯繫個別家長）',
+        'C': '備課印卷（教材教具準備、列印期中考雙向細目複習卷）'
+      },
+      quickReplies: [
+        { label: '✏️ A 批改作業', text: 'A 批改作業' },
+        { label: '📞 B 班務親師', text: 'B 班務親師' },
+        { label: '🖨️ C 備課印卷', text: 'C 備課印卷' },
+        { label: '⏩ 下一節', text: '下一節' },
+        { label: '⚡ 全部照常', text: '全部照常' }
+      ]
+    };
+  }
+
+  // 【導師親授科目】
+  let title = `📘 【第 ${index + 1}/${total} 節：${periodName} - ${subject}（導師授課）】`;
+  let desc = '';
+  let options = {};
+  let quickReplies = [];
+
+  const s = String(subject).trim();
+  if (s.includes('早自修') || s.includes('晨讀')) {
+    title = `☀️ 【第 ${index + 1}/${total} 節：${periodName} - ${subject}（導師時間）】`;
+    desc = `晨間常規與身心關懷：\n\n` +
+      `[A] 常規晨讀：檢查聯絡簿簽名、收取作業、引導自主閱讀\n` +
+      `[B] 迷思補救：除法估商或國語生字錯題個別輔導訂正\n` +
+      `[C] 在地共讀：共讀梧棲海線文史短篇或阿提米絲科普讀報\n\n` +
+      `👉 請點選建議，或直接輸入自訂交代：`;
+    options = {
+      'A': '常規晨讀（聯絡簿簽核、作業收取、晨讀引導）',
+      'B': '迷思補救（除法估商或國語生字個別輔導訂正）',
+      'C': '在地共讀（梧棲海線文史短篇或月球科普讀報）'
+    };
+    quickReplies = [
+      { label: '📖 A 常規晨讀', text: 'A 常規晨讀' },
+      { label: '💡 B 迷思補救', text: 'B 迷思補救' },
+      { label: '🌊 C 在地共讀', text: 'C 在地共讀' },
+      { label: '⏩ 下一節', text: '下一節' },
+      { label: '⚡ 全部照常', text: '全部照常' }
+    ];
+  } else if (s.includes('國')) {
+    title = `📘 【第 ${index + 1}/${total} 節：${periodName} - 國語（導師授課）】`;
+    desc = `當前進度：第6課未教第四段、統整一二未教、尚缺一篇作文。\n建議教學方案：\n\n` +
+      `[A] 標準進度：精讀第6課《又遠又近的月亮》第四段科技省思與句型「就算…也…」\n` +
+      `[B] 統整活動：拆解統整（一）讀信格式與朗讀節奏 / 統整（二）讀報五要素\n` +
+      `[C] 作文引導：搭配統整活動二「我最敬佩的人/家鄉一景」審題立意，補足期中作文\n\n` +
+      `👉 請點選建議，或直接輸入自訂進度：`;
+    options = {
+      'A': '精讀第6課《又遠又近的月亮》第四段科技省思與句型「就算…也…」',
+      'B': '統整活動（一）讀信格式與朗讀節奏 / 統整（二）讀報五要素拆解',
+      'C': '搭配統整活動二「我最敬佩的人/家鄉一景」審題立意，完成期中作文'
+    };
+    quickReplies = [
+      { label: '📖 A 標準進度', text: 'A 標準進度' },
+      { label: '📋 B 統整活動', text: 'B 統整活動' },
+      { label: '✍️ C 作文引導', text: 'C 作文引導' },
+      { label: '⏩ 下一節', text: '下一節' },
+      { label: '⚡ 全部照常', text: '全部照常' }
+    ];
+  } else if (s.includes('數')) {
+    title = `📘 【第 ${index + 1}/${total} 節：${periodName} - 數學（導師授課）】`;
+    desc = `當前進度：期中考範圍（單元一～五）已全數教完，進行螺旋總複習。\n建議教學方案：\n\n` +
+      `[A] 總複習精熟：除法二位數除以二位數/三位數除以二位數之試商精練\n` +
+      `[B] 迷思補救：除法估商補零退位診斷、三角形等腰與角度量測性質補救\n` +
+      `[C] 生活素養題：結合臺中港貨櫃裝載、拍賣數量之大數乘除混合應用\n\n` +
+      `👉 請點選建議，或直接輸入自訂進度：`;
+    options = {
+      'A': '除法二位數除以二位數/三位數除以二位數之試商精練與總複習',
+      'B': '除法估商補零退位診斷、三角形等腰與角度量測性質易錯題補救',
+      'C': '結合臺中港貨櫃裝載、漁獲拍賣之大數乘除生活素養題探究'
+    };
+    quickReplies = [
+      { label: '🎯 A 總複習精熟', text: 'A 總複習精熟' },
+      { label: '🔍 B 迷思補救', text: 'B 迷思補救' },
+      { label: '🚢 C 生活素養題', text: 'C 生活素養題' },
+      { label: '⏩ 下一節', text: '下一節' },
+      { label: '⚡ 全部照常', text: '全部照常' }
+    ];
+  } else if (s.includes('社')) {
+    title = `📗 【第 ${index + 1}/${total} 節：${periodName} - 社會（導師授課）】`;
+    desc = `當前進度：第一單元已教完，未教第二單元《家鄉的傳統住屋與器物》。\n建議教學方案：\n\n` +
+      `[A] 2-1 傳統住屋：導讀三合院、土埆厝、石板屋與就地取材之環境智慧\n` +
+      `[B] 2-2 生活器物：傳統器物與生活演變（竹編魚筌捕魚、陶甕石磨、火籠）\n` +
+      `[C] 梧棲老街探究：連結梧棲老街傳統街屋建築與早期海線常民器物\n\n` +
+      `👉 請點選建議，或直接輸入自訂進度：`;
+    options = {
+      'A': '2-1 導讀三合院、土埆厝、石板屋與就地取材之環境智慧',
+      'B': '2-2 傳統器物與生活演變（竹編魚筌捕魚、陶甕石磨、火籠演進）',
+      'C': '連結梧棲老街傳統閩南街屋建築與早期海線常民器物現地探究'
+    };
+    quickReplies = [
+      { label: '🏠 A 傳統住屋', text: 'A 傳統住屋' },
+      { label: '🏺 B 生活器物', text: 'B 生活器物' },
+      { label: '🏮 C 老街探究', text: 'C 老街探究' },
+      { label: '⏩ 下一節', text: '下一節' },
+      { label: '⚡ 全部照常', text: '全部照常' }
+    ];
+  } else if (s.includes('綜合')) {
+    title = `💻 【第 ${index + 1}/${total} 節：${periodName} - 綜合活動（導師授課）】`;
+    desc = `建議教學方案：\n\n` +
+      `[A] 標準進度：生活自主與班級自治主題探究實作\n` +
+      `[B] 期中作文補足：引導「我最敬佩的人」作文首稿撰寫\n` +
+      `[C] 梧風海線主題：探究海線高美濕地生態保育與永續生活\n\n` +
+      `👉 請點選建議，或直接輸入自訂進度：`;
+    options = {
+      'A': '綜合活動生活自主與班級自治主題探究實作',
+      'B': '期中作文補足：引導「我最敬佩的人」作文構思與寫作',
+      'C': '高美濕地生態保育與海洋廢棄物減量倡議探究'
+    };
+    quickReplies = [
+      { label: '🌟 A 標準進度', text: 'A 標準進度' },
+      { label: '✍️ B 作文補足', text: 'B 作文補足' },
+      { label: '🌊 C 梧風主題', text: 'C 梧風主題' },
+      { label: '⏩ 下一節', text: '下一節' },
+      { label: '⚡ 全部照常', text: '全部照常' }
+    ];
+  } else if (s.includes('電腦') || s.includes('資訊')) {
+    title = `💻 【第 ${index + 1}/${total} 節：${periodName} - 電腦資訊（導師授課）】`;
+    desc = `建議教學方案：\n\n` +
+      `[A] 數位素養：資訊倫理、中打練習與簡報製作基礎\n` +
+      `[B] 跨域應用：使用平板進行國語阿提米絲月球新聞資料檢索\n` +
+      `[C] 數位評量：PaGamO 數學期中考除法與角度複習任務\n\n` +
+      `👉 請點選建議，或直接輸入自訂進度：`;
+    options = {
+      'A': '資訊倫理與簡報排版基礎練習',
+      'B': '平板操作：阿提米絲新聞與月球科學資料檢索',
+      'C': 'PaGamO 數學除法與三角形螺旋複習任務'
+    };
+    quickReplies = [
+      { label: '💻 A 數位素養', text: 'A 數位素養' },
+      { label: '🔍 B 跨域檢索', text: 'B 跨域檢索' },
+      { label: '🎮 C PaGamO複習', text: 'C PaGamO複習' },
+      { label: '⏩ 下一節', text: '下一節' },
+      { label: '⚡ 全部照常', text: '全部照常' }
+    ];
+  } else if (s.includes('梧風') || s.includes('校本') || s.includes('彈性')) {
+    title = `🌊 【第 ${index + 1}/${total} 節：${periodName} - 梧風啟航（導師授課）】`;
+    desc = `校本彈性課程建議方案：\n\n` +
+      `[A] 梧風起航：臺中港區現代物流與國際海港發展史\n` +
+      `[B] 九降風探究：認識海線九降風特色與傳統曬魚、防風智慧\n` +
+      `[C] 高美濕地：濕地動植物生態與海堤風車地景探究\n\n` +
+      `👉 請點選建議，或直接輸入自訂進度：`;
+    options = {
+      'A': '梧風啟航：臺中港區現代物流與國際海港發展史',
+      'B': '海線九降風氣候特色與防風生活智慧探究',
+      'C': '高美濕地生態地景與潮間帶生物保護探究'
+    };
+    quickReplies = [
+      { label: '🚢 A 臺中港區', text: 'A 臺中港區' },
+      { label: '🌬️ B 九降風智慧', text: 'B 九降風智慧' },
+      { label: '🦀 C 高美濕地', text: 'C 高美濕地' },
+      { label: '⏩ 下一節', text: '下一節' },
+      { label: '⚡ 全部照常', text: '全部照常' }
+    ];
+  } else {
+    desc = `建議教學方案：\n\n` +
+      `[A] 標準教學進度循序推動\n` +
+      `[B] 習作與課堂練習精練補救\n` +
+      `[C] 生活化應用與小組互動發表\n\n` +
+      `👉 請點選建議，或直接輸入自訂進度：`;
+    options = {
+      'A': '標準教學進度循序推動',
+      'B': '習作與課堂練習精練補救',
+      'C': '生活化應用與小組互動發表'
+    };
+    quickReplies = [
+      { label: '📖 A 標準進度', text: 'A 標準進度' },
+      { label: '✏️ B 精練補救', text: 'B 精練補救' },
+      { label: '🌟 C 生活應用', text: 'C 生活應用' },
+      { label: '⏩ 下一節', text: '下一節' },
+      { label: '⚡ 全部照常', text: '全部照常' }
+    ];
+  }
+
+  return {
+    isHomeroom: true,
+    periodName: periodName,
+    subject: subject,
+    title: title,
+    fullText: `${title}\n━━━━━━━━━━━━━━\n${desc}`,
+    options: options,
+    quickReplies: quickReplies
+  };
+}
+
+/**
+ * 每日 20:00 晚間推播 / 下班復盤啟動：
+ * 採用「一節一節來」交互式確認下一個教學日之安排
  */
 function triggerEveningInteractiveReview(targetUserId, replyToken) {
   const teacherId = targetUserId || CONFIG.TEACHER_USER_ID;
@@ -515,22 +743,14 @@ function triggerEveningInteractiveReview(targetUserId, replyToken) {
   const today = new Date();
   const dayOfWeek = today.getDay();
   const todayStr = Utilities.formatDate(today, 'GMT+8', 'yyyy-MM-dd');
-  const dayZh = getDayOfWeekZh(dayOfWeek);
-  const todaySchedule = getScheduleByDay(dayZh);
-  const todayPlan = getSavedPlan(todayStr) || '今日照常規課表進行';
 
-  // 決定展望的「目標上課日」：
-  // 若是週五或週末，下一個正式上課日為「下週一」；平日則為「明天」
+  // 決定目標上課日：週五/週末展望下週一；平日展望明日
   let targetDate = new Date(today.getTime());
-  let isWeekendAhead = false;
-
-  if (dayOfWeek === 5) { // 週五 ➔ 展望下週一
+  if (dayOfWeek === 5) { // 週五 ➔ 下週一
     targetDate.setDate(targetDate.getDate() + 3);
-    isWeekendAhead = true;
-  } else if (dayOfWeek === 6) { // 週六 ➔ 展望下週一
+  } else if (dayOfWeek === 6) { // 週六 ➔ 下週一
     targetDate.setDate(targetDate.getDate() + 2);
-    isWeekendAhead = true;
-  } else if (dayOfWeek === 0) { // 週日 ➔ 展望明天週一
+  } else if (dayOfWeek === 0) { // 週日 ➔ 週一
     targetDate.setDate(targetDate.getDate() + 1);
   } else {
     targetDate.setDate(targetDate.getDate() + 1);
@@ -538,135 +758,192 @@ function triggerEveningInteractiveReview(targetUserId, replyToken) {
 
   const targetDateStr = Utilities.formatDate(targetDate, 'GMT+8', 'yyyy-MM-dd');
   const targetDayZh = getDayOfWeekZh(targetDate.getDay());
-  const targetSchedule = getScheduleByDay(targetDayZh);
+  let targetSchedule = getScheduleByDay(targetDayZh);
   const targetCalendar = getCalendarEvents(targetDateStr);
   const targetUniform = CONFIG.UNIFORMS[targetDayZh] || '便服';
 
-  // 取得週末明日（週六）可能有的全校特別行事（如校慶運動會）
-  const tomorrow = new Date(today.getTime() + 86400000);
-  const tomorrowStr = Utilities.formatDate(tomorrow, 'GMT+8', 'yyyy-MM-dd');
-  const weekendEvents = getCalendarEvents(tomorrowStr);
+  // 梧棲中正國小週一、週三為半天課（中午 12:00 放學，僅有 1~4 節）
+  if ((targetDayZh === '一' || targetDayZh === '三') && targetSchedule.length > 5) {
+    targetSchedule = targetSchedule.filter(s => {
+      const p = String(s.period);
+      return !p.includes('五') && !p.includes('六') && !p.includes('七');
+    });
+  }
 
-  // 今日突發事件
-  const recentIncidents = getRecentIncidents(todayStr);
+  const sessionData = {
+    todayStr: todayStr,
+    targetDateStr: targetDateStr,
+    targetDayZh: targetDayZh,
+    targetUniform: targetUniform,
+    targetCalendar: targetCalendar,
+    schedule: targetSchedule,
+    currentIndex: 0,
+    answers: []
+  };
 
-  const prompt = `你是一名【臺中市梧棲區中正國小 四年丙班 (304班)】的資深教學助教。
-現在是復盤時間。
+  if (teacherId) {
+    saveSessionState(teacherId, 'EVENING_STEP_BY_STEP', sessionData);
+  }
 
-${getCurriculumPromptContext()}
+  // 起始引言
+  const introMsg = `🌙 【下班復盤啟動・一節一節確認安排】\n` +
+    `🎯 規劃目標：${targetDateStr} 週${targetDayZh}（${targetUniform}）\n` +
+    `共 ${targetSchedule.length} 節課，我們一節一節快速確認！\n` +
+    `（提示：非國/數/社/綜合/電腦/梧風之科任課，將提供「導師空白時間待辦」；亦可隨時點「⚡全部照常」一鍵完成）\n\n`;
 
-【今日（${todayStr} 週${dayZh}）教學回顧】：
-- 今日課表：${JSON.stringify(todaySchedule)}
-- 今晨確認之待辦規劃：${todayPlan}
-- 今日記錄之突發事件：${recentIncidents.length > 0 ? recentIncidents.join('；') : '無特殊突發紀錄，常規良好'}
+  sendReviewStepQuestion(teacherId, replyToken, sessionData, introMsg);
+}
 
-【下一個教學日（${targetDateStr} 週${targetDayZh}）展望】：
-- 服裝規定：${targetUniform}
-- 課表節次：${JSON.stringify(targetSchedule)}
-- 當日學校重大行事：${targetCalendar.length > 0 ? targetCalendar.join('、') : '常規教學日'}
-${isWeekendAhead ? `- 週末行事提醒（${tomorrowStr}）：${weekendEvents.length > 0 ? weekendEvents.join('、') : '週末放假好好休息'}` : ''}
+/**
+ * 發送單一節次之復盤詢問卡片
+ */
+function sendReviewStepQuestion(userId, replyToken, sessionData, prefixMsg) {
+  const index = sessionData.currentIndex;
+  const currentPeriod = sessionData.schedule[index];
+  const card = getPeriodReviewCard(currentPeriod, index, sessionData.schedule.length, sessionData.targetDayZh, sessionData.targetDateStr);
 
-【核心任務要求 - 為下個教學日（週${targetDayZh}）早自修至放學每節課提供三種具體選項】：
-不要叫老師從零打字填空！請根據今日實際進度與下個教學日（週${targetDayZh}）課表，梳理狀況，並為【早自修至放學的每一節課】精確規劃 3 種切合上述真實進度基準線（南一數已教完進入複習精熟、翰林國未教第6課第四段與統整活動一二、康軒社未教第二單元、作文缺一篇、10/30製作期中考前範圍圖）之備選建議：
-- [A] 標準進度：南一數複習精熟/翰林國未教單元概念講授/康軒社第二單元核心概念導讀。
-- [B] 精練補救：習作加強、易錯迷思補救（除法退位補零、等腰三角形性質、字音字形雙向細目練習）。
-- [C] 探究實作：梧棲海線在地連結（臺中港/高美濕地/九降風/老街三合院）、小組發表或活動。
-（若為科任課，則提供三種帶隊、用具檢查與秩序叮嚀選項）
+  const fullText = (prefixMsg ? prefixMsg : '') + card.fullText;
 
-請輸出結構清晰、條列明確的繁體中文：
-1. 🌙 今日復盤摘要（課堂完成度回顧）
-2. 📋 下一個教學日（${targetDateStr} 週${targetDayZh}）各節次三選一提案：
-   ▫️ 早自修 (07:50-08:40)：[A]... | [B]... | [C]...
-   ▫️ 第一節 (08:45-09:25) [科目]：[A]... | [B]... | [C]...
-   ▫️ 第二節 (09:35-10:15) [科目]：[A]... | [B]... | [C]...
-   ...依週${targetDayZh}節次依序展開...
-   ▫️ 午餐/放學：注意事項
-3. 提示導師：「可回傳『全選A』、『全選B』，或指定微調。亦可點選下方按鈕臨時改變進度或重新設計進度！」`;
-
-  try {
-    const reviewProposal = callGeminiText(prompt);
-
-    if (teacherId) {
-      saveSessionState(teacherId, 'EVENING_PENDING', {
-        todayStr: todayStr,
-        tomorrowStr: targetDateStr,
-        tomorrowDayZh: targetDayZh,
-        tomorrowSchedule: targetSchedule,
-        tomorrowCalendar: targetCalendar,
-        tomorrowUniform: targetUniform,
-        proposal: reviewProposal
-      });
-    }
-
-    const quickReplies = [
-      { label: '✅ 全選進度(全A)', text: '全選A' },
-      { label: '📘 全選補救(全B)', text: '全選B' },
-      { label: '⚡ 臨時改變進度', text: '臨時改變進度' },
-      { label: '🔄 重新設計進度', text: '重新設計進度' }
-    ];
-
-    const msgText = `🌙 【晚間復盤與下個教學日（${targetDateStr} 週${targetDayZh}）建議】\n━━━━━━━━━━━━━━\n${reviewProposal}`;
-
-    if (replyToken) {
-      replyTextMessageWithQuickReply(replyToken, msgText, quickReplies);
-    } else if (teacherId) {
-      pushMessageWithQuickReply(teacherId, msgText, quickReplies);
-    }
-  } catch (err) {
-    console.error('復盤生成錯誤: ' + err.toString());
-    const fallbackMsg = `🌙 【晚間復盤】\n━━━━━━━━━━━━━━\n今日為週五，今日課堂已圓滿結束！\n明日行事提醒：${weekendEvents.length > 0 ? weekendEvents.join('、') : '週末放假好好休息！'}\n\n下一個教學日為 10/26（週一，穿著班服，半天課中午 12:00 放學）。\n若需調整課程，可隨時點選下方按鈕！`;
-    if (replyToken) {
-      replyTextMessageWithQuickReply(replyToken, fallbackMsg, [
-        { label: '⚡ 臨時改變進度', text: '臨時改變進度' },
-        { label: '🔄 重新設計進度', text: '重新設計進度' },
-        { label: '📊 個人儀表板', text: '個人儀表板' }
-      ]);
-    }
+  if (replyToken) {
+    replyTextMessageWithQuickReply(replyToken, fullText, card.quickReplies);
+  } else if (userId) {
+    pushMessageWithQuickReply(userId, fullText, card.quickReplies);
   }
 }
 
 /**
- * 處理導師對 20:00 晚間復盤的選擇，並排定明日早自修至第七節待辦
+ * 處理導師「一節一節來」的回覆
  */
-function handleEveningConfirmation(userId, text, replyToken) {
+function handleStepByStepReviewReply(userId, text, replyToken) {
   const session = getSessionState(userId);
-  const data = session ? session.data : {};
-  
-  const tomorrowStr = data.tomorrowStr || Utilities.formatDate(new Date(Date.now() + 86400000), 'GMT+8', 'yyyy-MM-dd');
-  const tomorrowDayZh = data.tomorrowDayZh || getDayOfWeekZh(new Date(Date.now() + 86400000).getDay());
-  const tomorrowSchedule = data.tomorrowSchedule || getScheduleByDay(tomorrowDayZh);
-  const tomorrowCalendar = data.tomorrowCalendar || getCalendarEvents(tomorrowStr);
-  const tomorrowUniform = data.tomorrowUniform || (CONFIG.UNIFORMS[tomorrowDayZh] || '便服');
+  if (!session || !session.data) {
+    replyTextMessage(replyToken, '復盤狀態已過期，請點選「下班復盤」重新開始！');
+    return;
+  }
 
-  const prompt = `你是一名專屬支援【臺中市梧棲區中正國小 四年丙班 (304班)】的專業教務助教。
-在晚間 20:00 復盤中，導師做出的選擇與回饋為：「${text}」
-參考原提案：
-${data.proposal || ''}
+  const data = session.data;
+  let index = data.currentIndex || 0;
+  const schedule = data.schedule || [];
+  const answers = data.answers || [];
 
-明日資訊：
-- 日期：${tomorrowStr} 星期${tomorrowDayZh}（${tomorrowUniform}）
-- 課表節次：${JSON.stringify(tomorrowSchedule)}
-- 學校重大行事：${tomorrowCalendar.length > 0 ? tomorrowCalendar.join('、') : '常規教學日'}
+  if (index >= schedule.length) {
+    finishEveningStepReview(userId, data, replyToken);
+    return;
+  }
 
-【任務要求】：
-請根據導師的復盤選擇與反饋，嚴格遵守南一數、翰林國、康軒社、校本梧風啟航之進度，為導師完整產出【明日（${tomorrowStr} 週${tomorrowDayZh}）早自修至第七節 客製化教學待辦與備課清單】：
-- ☀️ 早自修 (07:50-08:40)：聯絡簿、作業收取、晨讀或導師補救交代
-- 📘 第一節課至第七節課：每一節課的具體教學重點（導師課）或帶隊叮嚀（科任課）
-- 🍱 午餐與午休 / 🎒 放學時間與路隊
-- 💡 特別提醒（今日導師交辦之追蹤）
+  const cleanText = text.trim();
 
-請輸出結構清晰、充滿溫度且可以直接執行的繁體中文清單：`;
+  // 若導師選擇「全部照常」或「全選A」
+  if (cleanText.includes('全部照常') || cleanText === '全選A' || cleanText === '全部A') {
+    for (let i = index; i < schedule.length; i++) {
+      const p = schedule[i];
+      const card = getPeriodReviewCard(p, i, schedule.length, data.targetDayZh, data.targetDateStr);
+      answers.push({
+        period: p.period,
+        subject: p.subject,
+        isHomeroom: card.isHomeroom,
+        choice: card.options['A'] || '照常規推進'
+      });
+    }
+    data.currentIndex = schedule.length;
+    data.answers = answers;
+    finishEveningStepReview(userId, data, replyToken);
+    return;
+  }
 
-  const tomorrowPlan = callGeminiText(prompt);
+  // 處理當前節次之選擇
+  const currentP = schedule[index];
+  const card = getPeriodReviewCard(currentP, index, schedule.length, data.targetDayZh, data.targetDateStr);
+  let chosenText = '';
 
-  saveTomorrowPlanToSheet(tomorrowStr, tomorrowDayZh, tomorrowPlan);
+  if (cleanText.startsWith('A') || cleanText.includes('[A') || cleanText.includes('A ')) {
+    chosenText = card.options['A'] || cleanText;
+  } else if (cleanText.startsWith('B') || cleanText.includes('[B') || cleanText.includes('B ')) {
+    chosenText = card.options['B'] || cleanText;
+  } else if (cleanText.startsWith('C') || cleanText.includes('[C') || cleanText.includes('C ')) {
+    chosenText = card.options['C'] || cleanText;
+  } else if (cleanText.includes('下一節') || cleanText.includes('跳過')) {
+    chosenText = card.options['A'] || '照常規推進';
+  } else {
+    // 導師自訂具體文字（例如：「這節改上數學」、「這節看防災影片」）
+    chosenText = cleanText;
+  }
+
+  answers.push({
+    period: currentP.period,
+    subject: currentP.subject,
+    isHomeroom: card.isHomeroom,
+    choice: chosenText
+  });
+
+  index++;
+  data.currentIndex = index;
+  data.answers = answers;
+
+  if (index < schedule.length) {
+    saveSessionState(userId, 'EVENING_STEP_BY_STEP', data);
+    const confirmPrefix = `✅ ${currentP.period}（${currentP.subject}）已記錄：\n👉 ${chosenText}\n━━━━━━━━━━━━━━\n\n`;
+    sendReviewStepQuestion(userId, replyToken, data, confirmPrefix);
+  } else {
+    finishEveningStepReview(userId, data, replyToken);
+  }
+}
+
+/**
+ * 復盤全部節次確認完成：組合清單、存入試算表與儀表板、回傳完成訊息
+ */
+function finishEveningStepReview(userId, data, replyToken) {
+  const targetDateStr = data.targetDateStr;
+  const targetDayZh = data.targetDayZh;
+  const targetUniform = data.targetUniform;
+  const targetCalendar = data.targetCalendar || [];
+  const answers = data.answers || [];
+
+  let planLines = [];
+  answers.forEach((ans) => {
+    const icon = ans.isHomeroom ? (ans.period.includes('早自修') ? '☀️' : (ans.subject.includes('社') ? '📗' : (ans.subject.includes('國') || ans.subject.includes('數') ? '📘' : '💻'))) : '☕';
+    const tag = ans.isHomeroom ? (ans.period.includes('早自修') ? '' : ' [導師課]') : ' [科任課·導師空白時間]';
+    planLines.push(`${icon} ${ans.period} ${ans.subject}${tag}：\n   ➔ ${ans.choice}`);
+  });
+
+  const isHalfDay = (targetDayZh === '一' || targetDayZh === '三');
+  const dismissTime = isHalfDay ? '12:00 半天放學（路隊引導與安全離校）' : '15:50 全天放學（打掃、聯絡簿確認、路隊引導）';
+  planLines.push(`🎒 放學時間：${dismissTime}`);
+
+  const finalPlanText = planLines.join('\n\n');
+
+  // 儲存至試算表「每日待辦」分頁
+  saveTomorrowPlanToSheet(targetDateStr, targetDayZh, finalPlanText);
   clearSessionState(userId);
 
-  replyTextMessage(replyToken, `📋 【明日（${tomorrowStr} 週${tomorrowDayZh}）各節次待辦與建議已排定】
-━━━━━━━━━━━━━━
-${tomorrowPlan}
-━━━━━━━━━━━━━━
-💡 此規劃已同步至試算表與個人儀表板。明晨 06:30 會主動為您發送晨間確認！祝老師今晚好眠！`);
+  const wrapUpMsg = `🎉 【下一個教學日（${targetDateStr} 週${targetDayZh}）教學與待辦全數排定完成！】\n` +
+    `━━━━━━━━━━━━━━\n` +
+    `👗 學生服裝：${targetUniform}\n` +
+    `🏫 學校行事：${targetCalendar.length > 0 ? targetCalendar.join('、') : '常規教學日'}\n\n` +
+    `📋 【各節次已確認之教學與待辦清單】：\n` +
+    `${finalPlanText}\n` +
+    `━━━━━━━━━━━━━━\n` +
+    `💡 此規劃已同步至試算表與個人儀表板。明晨 06:30 會主動為您發送晨間安排確認！祝老師下班愉快順心！`;
+
+  const quickReplies = [
+    { label: '📊 個人儀表板', text: '個人儀表板' },
+    { label: '⚡ 臨時改變進度', text: '臨時改變進度' },
+    { label: '🔄 重新設計進度', text: '重新設計進度' }
+  ];
+
+  if (replyToken) {
+    replyTextMessageWithQuickReply(replyToken, wrapUpMsg, quickReplies);
+  } else if (userId) {
+    pushMessageWithQuickReply(userId, wrapUpMsg, quickReplies);
+  }
+}
+
+/**
+ * 舊版相容：處理整包確認模式
+ */
+function handleEveningConfirmation(userId, text, replyToken) {
+  clearSessionState(userId);
+  replyTextMessage(replyToken, '收到！已為您更新。隨時點選「下班復盤」即可啟動新版逐節復盤！');
 }
 
 // 相容舊函式
@@ -841,12 +1118,14 @@ function replyTodaySchedule(replyToken, userId) {
     return;
   }
 
-  // 2. 若今日尚未產出各節三選一建議，立即由 Gemini 現場即時分析課表與教材基準，動態生成！
-  const prompt = `你是一名專屬支援【臺中市梧棲區中正國民小學 四年丙班 (304班)】的專業教務智慧助教。
+  // 2. 若今日尚未產出各節三選一建議，動態生成各節次三選一提案（嚴格遵守：非國數社綜合電腦梧風者，轉為導師空白時間待辦）
+  let proposalText = '';
+  try {
+    const prompt = `你是一名專屬支援【臺中市梧棲區中正國民小學 四年丙班 (304班)】的專業教務智慧助教。
 嚴格遵守【G4 Curriculum Review 全域三階漏斗審查】：
 - 教科書版本：南一數學 4上、翰林國語 4上、康軒社會 4上、校本彈性梧風啟航
-- 關鍵里程碑：11/05-11/06 第一次定期評量（期中考，倒數 13 天）
-- 在地情境：臺中港區、梧棲漁港、高美濕地、九降風海風文化
+- 關鍵進度：南一數期中已全教完進入複習；翰林國未教第6課第四段與統整活動一二；康軒社未教第二單元全單元；作文缺一篇。
+- 重要規則：若為國、數、社、綜合、電腦、梧風起航或早自修，給予教學三選一建議；其餘科目（如自然、體育、音樂、美勞、英語等科任課）一律轉為【導師空白時間・空堂備課待辦】（如批閱作業、班務親師、備課印卷），絕不給該科授課建議！
 
 ${getCurriculumPromptContext()}
 
@@ -856,25 +1135,34 @@ ${getCurriculumPromptContext()}
 ${JSON.stringify(schedule, null, 2)}
 今日學校重大行事：${calendarEvents.length > 0 ? calendarEvents.join('、') : '常規教學日'}
 
-【重要核心要求 - 每一節課皆提供三種具體建議方案】：
-不要只列出空課表！導師要的是【早自修至第七節的每一節課，皆給予 3 種具體可選的備選建議方案】，供導師直接點選組合或即時微調：
-- [A] 標準進度：南一數總複習精熟/翰林國未教單元概念講授/康軒社第二單元核心概念導讀。
-- [B] 習作補救：針對四年級典型迷思（除法估商補零/等腰三角形性質/字音字形雙向細目/住屋器物分類）補救演練。
-- [C] 在地探究：結合梧棲海線生活情境（臺中港、高美濕地、九降風、梧棲老街傳統建築）之生活化應用、小組討論或多元評量。
-（若為科任課，則提供三種帶隊、用具檢查與秩序叮嚀選項）
-
 請以極具結構感、清晰好讀的繁體中文條列呈現：
 ☀️ 今日總覽：服裝提醒 + 放學時間 + 學校行事
-⏰ 各節次三選一提案：
-▫️ 早自修 (07:50-08:40)：[A]... | [B]... | [C]...
-▫️ 第一節 (08:45-09:25) [科目]：[A]... | [B]... | [C]...
-▫️ 第二節 (09:35-10:15) [科目]：[A]... | [B]... | [C]...
-...依今日所有節次依序列出...
-▫️ 午餐/放學：注意事項
+⏰ 各節次提案（導師課提供A/B/C教學建議；科任課提供導師空白時間A/B/C待辦建議）：
+...依今日課表所有節次依序列出...
+▫️ 放學注意事項
 
-文末引導導師：「您可回傳『全選A』、『全選B』，或輸入微調（如『第1節B，其餘A』）。亦可點選『臨時改變進度』或『重新設計進度』！」`;
+文末引導導師：「您可回傳『全選A』、『全選B』，或輸入微調。亦可點選下方按鈕調整！」`;
 
-  const proposalText = callGeminiText(prompt);
+    proposalText = callGeminiText(prompt);
+  } catch (err) {
+    console.warn('Gemini 產出今日建議失敗，使用結構化備援卡片: ' + err.toString());
+    let fallbackLines = [
+      `☀️ 【今日總覽（${CONFIG.CLASS_NAME}·週${dayZh}）】`,
+      `👗 學生服裝：${uniformNote}`,
+      `🏫 學校行事：${calendarEvents.length > 0 ? calendarEvents.join('、') : '今日常規教學，無重大集會'}`,
+      `━━━━━━━━━━━━━━`,
+      `⏰ 【今日各節次建議方案】：`
+    ];
+    for (let i = 0; i < schedule.length; i++) {
+      const p = schedule[i];
+      const card = getPeriodReviewCard(p, i, schedule.length, dayZh, todayStr);
+      const icon = card.isHomeroom ? (card.periodName.includes('早自修') ? '☀️' : '📘') : '☕';
+      const label = card.isHomeroom ? '' : '（科任課・導師空白時間）';
+      fallbackLines.push(`${icon} ${card.periodName} - ${card.subject}${label}：\n   [A] ${card.options['A']}\n   [B] ${card.options['B']}\n   [C] ${card.options['C']}`);
+    }
+    fallbackLines.push(`━━━━━━━━━━━━━━\n💡 導師可回傳「全選A」、「全選B」，或點選下方按鈕！`);
+    proposalText = fallbackLines.join('\n\n');
+  }
 
   if (teacherId) {
     saveSessionState(teacherId, 'MORNING_PENDING', {
@@ -1099,64 +1387,84 @@ function callGeminiText(prompt) {
     return '【提示】尚未設定 GEMINI_API_KEY，請至 Apps Script 專案設定中加入金鑰。';
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${apiKey}`;
-  const payload = {
-    contents: [{
-      parts: [{ text: prompt }]
-    }],
-    generationConfig: {
-      temperature: 0.4
+  const models = [CONFIG.GEMINI_MODEL || 'gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash'];
+  for (let m = 0; m < models.length; m++) {
+    const model = models[m];
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const payload = {
+        contents: [{
+          parts: [{ text: prompt }]
+        }],
+        generationConfig: {
+          temperature: 0.4
+        }
+      };
+
+      const options = {
+        method: 'post',
+        contentType: 'application/json',
+        payload: JSON.stringify(payload),
+        muteHttpExceptions: true
+      };
+
+      const res = UrlFetchApp.fetch(url, options);
+      const json = JSON.parse(res.getContentText());
+      if (json.candidates && json.candidates[0].content && json.candidates[0].content.parts && json.candidates[0].content.parts[0].text) {
+        return json.candidates[0].content.parts[0].text.trim();
+      }
+    } catch (e) {
+      console.warn(`Gemini 模型 ${model} 呼叫失敗，嘗試備援模型: ` + e.toString());
     }
-  };
-
-  const options = {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
-  };
-
-  const res = UrlFetchApp.fetch(url, options);
-  const json = JSON.parse(res.getContentText());
-  if (json.candidates && json.candidates[0].content.parts[0].text) {
-    return json.candidates[0].content.parts[0].text.trim();
   }
-  throw new Error('Gemini API 回應異常: ' + res.getContentText());
+  throw new Error('Gemini API 連線失敗，已嘗試多組備援模型。');
 }
 
 function callGeminiVision(base64Data, mimeType, prompt) {
   const apiKey = CONFIG.GEMINI_API_KEY;
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${CONFIG.GEMINI_MODEL}:generateContent?key=${apiKey}`;
-  const payload = {
-    contents: [{
-      parts: [
-        { text: prompt },
-        {
-          inlineData: {
-            mimeType: mimeType,
-            data: base64Data
-          }
-        }
-      ]
-    }],
-    generationConfig: {
-      temperature: 0.2
-    }
-  };
-
-  const options = {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify(payload),
-    muteHttpExceptions: true
-  };
-
-  const res = UrlFetchApp.fetch(url, options);
-  const json = JSON.parse(res.getContentText());
-  if (json.candidates && json.candidates[0].content.parts[0].text) {
-    return json.candidates[0].content.parts[0].text.trim();
+  if (!apiKey || apiKey === 'YOUR_GEMINI_API_KEY') {
+    return '【提示】尚未設定 GEMINI_API_KEY，請至 Apps Script 專案設定中加入金鑰。';
   }
-  throw new Error('Gemini Vision API 回應異常: ' + res.getContentText());
+
+  const models = [CONFIG.GEMINI_MODEL || 'gemini-2.5-flash', 'gemini-1.5-flash', 'gemini-2.0-flash'];
+  for (let m = 0; m < models.length; m++) {
+    const model = models[m];
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const payload = {
+        contents: [{
+          parts: [
+            { text: prompt },
+            {
+              inlineData: {
+                mimeType: mimeType,
+                data: base64Data
+              }
+            }
+          ]
+        }],
+        generationConfig: {
+          temperature: 0.2
+        }
+      };
+
+      const options = {
+        method: 'post',
+        contentType: 'application/json',
+        payload: JSON.stringify(payload),
+        muteHttpExceptions: true
+      };
+
+      const res = UrlFetchApp.fetch(url, options);
+      const json = JSON.parse(res.getContentText());
+      if (json.candidates && json.candidates[0].content && json.candidates[0].content.parts && json.candidates[0].content.parts[0].text) {
+        return json.candidates[0].content.parts[0].text.trim();
+      }
+    } catch (e) {
+      console.warn(`Gemini Vision 模型 ${model} 呼叫失敗，嘗試備援模型: ` + e.toString());
+    }
+  }
+  throw new Error('Gemini Vision API 連線失敗，已嘗試多組備援模型。');
 }
 
 // ======================== 【LINE Messaging API 工具模組】 ========================
