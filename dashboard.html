@@ -3,326 +3,618 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>國小導師日常駕駛艙｜班級管理與教學儀表板</title>
+  <title>臺中市梧棲區中正國小 304 導師智慧教學駕駛艙</title>
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400..700;1,9..40,400..700&family=Noto+Sans+TC:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+  
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&display=swap');
-    body { font-family: 'Noto Sans TC', sans-serif; background-color: #f8fafc; }
+    /* 得利「淺灘銀珠」(Dulux 30YY 69/048) 專屬暖灰奶油質感調色板 */
+    :root {
+      --color-strand-base: #DDD7CD;
+      --color-strand-light: #EBE6DE;
+      --color-strand-lighter: #F6F3EE;
+      --color-strand-dark: #C5BCAD;
+      --color-strand-darker: #9C9384;
+      --color-charcoal: #2C2824;
+      --color-charcoal-soft: #423D37;
+      --color-gold-accent: #C59B27;
+      --color-pine-green: #3B5F54;
+      --color-coral-red: #B54D48;
+    }
+
+    body {
+      font-family: 'Noto Sans TC', 'DM Sans', sans-serif;
+      background-color: var(--color-strand-base);
+      background-image: 
+        radial-gradient(at 0% 0%, rgba(246, 243, 238, 0.75) 0px, transparent 50%),
+        radial-gradient(at 100% 100%, rgba(197, 188, 173, 0.5) 0px, transparent 50%),
+        radial-gradient(at 50% 50%, rgba(235, 230, 222, 0.6) 0px, transparent 100%);
+      color: var(--color-charcoal);
+      min-height: 100vh;
+    }
+
+    .font-mono-num {
+      font-family: 'JetBrains Mono', 'DM Sans', monospace;
+    }
+
+    /* 帆軟 FineReport / FineVis 大屏裝飾風格邊角與卡片 */
+    .bi-card {
+      background: rgba(248, 246, 241, 0.94);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(197, 188, 173, 0.65);
+      box-shadow: 0 4px 20px -2px rgba(44, 40, 36, 0.05), 0 2px 6px -1px rgba(44, 40, 36, 0.03);
+      position: relative;
+    }
+
+    /* 科技感微裝飾四角 */
+    .bi-corner::before {
+      content: '';
+      position: absolute;
+      top: -1px;
+      left: -1px;
+      width: 8px;
+      height: 8px;
+      border-top: 2px solid var(--color-gold-accent);
+      border-left: 2px solid var(--color-gold-accent);
+      border-top-left-radius: 4px;
+    }
+    .bi-corner::after {
+      content: '';
+      position: absolute;
+      top: -1px;
+      right: -1px;
+      width: 8px;
+      height: 8px;
+      border-top: 2px solid var(--color-gold-accent);
+      border-right: 2px solid var(--color-gold-accent);
+      border-top-right-radius: 4px;
+    }
+
+    /* 頂部大屏主標題背板 (FineReport 旗艦翼展風格) */
+    .bi-header-banner {
+      background: linear-gradient(180deg, #2A2622 0%, #1F1C19 100%);
+      box-shadow: 0 6px 24px rgba(31, 28, 25, 0.25), inset 0 1px 1px rgba(255, 255, 255, 0.12);
+      border-bottom: 2px solid var(--color-gold-accent);
+      clip-path: polygon(0 0, 100% 0, 98% 100%, 2% 100%);
+    }
+
+    /* 自訂滾動條 */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: rgba(221, 215, 205, 0.3); }
+    ::-webkit-scrollbar-thumb { background: rgba(156, 147, 132, 0.5); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(120, 110, 95, 0.8); }
   </style>
 </head>
-<body class="text-slate-800 antialiased min-h-screen flex flex-col">
+<body class="antialiased flex flex-col p-3 md:p-6 space-y-5 selection:bg-amber-100 selection:text-amber-900">
 
-  <!-- 頂部導航列 -->
-  <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex justify-between items-center">
-      <div class="flex items-center space-x-3">
-        <div class="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-md">
-          <i class="fa-solid fa-graduation-cap text-lg"></i>
-        </div>
+  <!-- ======================== 【頂部大屏 Header 儀式列】 ======================== -->
+  <header class="w-full flex flex-col lg:flex-row items-center justify-between gap-4 px-2">
+    <!-- 左側：即時時間與日期 -->
+    <div class="flex items-center space-x-3 order-2 lg:order-1">
+      <div class="bi-card px-4 py-2 rounded-xl flex items-center space-x-3">
+        <div class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></div>
         <div>
-          <h1 class="text-lg font-bold text-slate-900 leading-tight">導師日常駕駛艙</h1>
-          <p class="text-xs text-slate-500">國小中年級班級營運與行程待辦</p>
+          <div id="liveClock" class="font-mono-num font-bold text-base tracking-wider text-slate-800">12:00:00</div>
+          <div id="dateDisplay" class="text-[11px] text-slate-500 font-medium">載入日期中...</div>
         </div>
       </div>
-      <div class="flex items-center space-x-3">
-        <span id="currentDateBadge" class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-100">
-          <i class="fa-regular fa-calendar-days mr-1.5"></i>載入中...
-        </span>
-        <button onclick="refreshData()" class="p-2 text-slate-500 hover:text-indigo-600 hover:bg-slate-100 rounded-lg transition" title="重新整理">
-          <i class="fa-solid fa-rotate-right"></i>
-        </button>
+      <div class="hidden sm:flex bi-card px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 items-center space-x-1.5">
+        <i class="fa-solid fa-school text-amber-700"></i>
+        <span>115 學年度第 1 學期</span>
       </div>
+    </div>
+
+    <!-- 中間：帆軟大屏風格旗艦翼展標題 -->
+    <div class="order-1 lg:order-2 w-full lg:w-auto text-center">
+      <div class="bi-header-banner px-8 sm:px-14 py-3 mx-auto inline-block text-white rounded-b-xl relative">
+        <div class="flex items-center justify-center space-x-2 text-xs font-bold text-amber-400/90 tracking-widest uppercase mb-0.5">
+          <i class="fa-solid fa-compass-drafting text-[10px]"></i>
+          <span>智慧班級經營大屏 · BI DASHBOARD</span>
+          <i class="fa-solid fa-compass-drafting text-[10px]"></i>
+        </div>
+        <h1 class="text-xl sm:text-2xl font-extrabold tracking-wide text-white drop-shadow-sm flex items-center justify-center gap-2">
+          <span>臺中市梧棲區中正國小 304 導師智慧駕駛艙</span>
+        </h1>
+        <div class="text-[11px] text-slate-300 font-medium tracking-wide mt-1 flex items-center justify-center gap-3">
+          <span class="bg-white/10 px-2 py-0.5 rounded text-[10px] text-amber-200">📘 南一數 4上</span>
+          <span class="bg-white/10 px-2 py-0.5 rounded text-[10px] text-amber-200">📙 翰林國 4上</span>
+          <span class="bg-white/10 px-2 py-0.5 rounded text-[10px] text-amber-200">📗 康軒社 4上</span>
+          <span class="bg-white/10 px-2 py-0.5 rounded text-[10px] text-emerald-300">🌊 梧風啟航校本</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右側：控制按鈕與期中考倒數標籤 -->
+    <div class="flex items-center space-x-2.5 order-3">
+      <!-- 期中考倒數徽章 -->
+      <div class="bi-card px-3.5 py-2 rounded-xl flex items-center space-x-2 border-l-4 border-l-amber-600">
+        <i class="fa-solid fa-hourglass-half text-amber-600 text-sm"></i>
+        <div>
+          <div class="text-[10px] font-bold text-slate-500 uppercase">期中考倒數</div>
+          <div class="text-xs font-extrabold text-amber-900 font-mono-num">
+            剩 <span id="examCountdownDays" class="text-sm font-black text-rose-600">--</span> 天 (11/05)
+          </div>
+        </div>
+      </div>
+
+      <button onclick="refreshDashboardData()" class="bi-card hover:bg-white text-slate-700 px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center space-x-1.5 transition active:scale-95 shadow-sm" title="更新最新數據">
+        <i class="fa-solid fa-rotate-right text-slate-500"></i>
+        <span class="hidden sm:inline">重新整理</span>
+      </button>
     </div>
   </header>
 
-  <!-- 主要內容區 -->
-  <main class="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full space-y-6">
-
-    <!-- 頂部四格統計卡 -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-      <!-- 班級規模 -->
-      <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex items-center justify-between">
-        <div>
-          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">班級學生人數</p>
-          <h3 id="statStudents" class="text-2xl font-extrabold text-slate-800 mt-1">28 <span class="text-sm font-normal text-slate-500">人</span></h3>
-          <p class="text-xs text-slate-500 mt-1">每生班費收 $300 元</p>
+  <!-- ======================== 【頂部 4 格核心指標卡 (KPI Cards)】 ======================== -->
+  <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    <!-- KPI 1: 班級規模 -->
+    <div class="bi-card bi-corner p-4 rounded-2xl flex items-center justify-between">
+      <div class="space-y-1">
+        <div class="flex items-center space-x-1.5 text-xs font-semibold text-slate-500">
+          <i class="fa-solid fa-users text-indigo-700"></i>
+          <span>班級學生在籍規模</span>
         </div>
-        <div class="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center text-xl">
-          <i class="fa-solid fa-users"></i>
+        <div class="flex items-baseline space-x-2">
+          <span id="kpiStudents" class="text-3xl font-black text-slate-900 font-mono-num">28</span>
+          <span class="text-xs font-bold text-slate-500">位學生</span>
         </div>
+        <p class="text-[11px] text-slate-500">每生班費收取 $300 元 / 學期</p>
       </div>
-
-      <!-- 班費總收 -->
-      <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex items-center justify-between">
-        <div>
-          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">本學期應收班費</p>
-          <h3 id="statIncome" class="text-2xl font-extrabold text-emerald-600 mt-1">$8,400</h3>
-          <p class="text-xs text-emerald-600 mt-1"><i class="fa-solid fa-circle-check mr-1"></i>全班已繳齊</p>
-        </div>
-        <div class="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-xl">
-          <i class="fa-solid fa-wallet"></i>
-        </div>
-      </div>
-
-      <!-- 目前累計支出 -->
-      <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex items-center justify-between">
-        <div>
-          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">累計核銷支出</p>
-          <h3 id="statExpense" class="text-2xl font-extrabold text-rose-600 mt-1">$0</h3>
-          <p id="statExpenseCount" class="text-xs text-slate-500 mt-1">0 筆收據核銷</p>
-        </div>
-        <div class="w-12 h-12 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center text-xl">
-          <i class="fa-solid fa-receipt"></i>
-        </div>
-      </div>
-
-      <!-- 目前結餘 -->
-      <div class="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex items-center justify-between">
-        <div>
-          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">班費目前結餘</p>
-          <h3 id="statBalance" class="text-2xl font-extrabold text-indigo-600 mt-1">$8,400</h3>
-          <div class="w-full bg-slate-100 rounded-full h-1.5 mt-2 overflow-hidden">
-            <div id="balanceProgress" class="bg-indigo-600 h-1.5 rounded-full" style="width: 100%"></div>
-          </div>
-        </div>
-        <div class="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center text-xl">
-          <i class="fa-solid fa-piggy-bank"></i>
-        </div>
+      <div class="w-12 h-12 rounded-2xl bg-indigo-50 border border-indigo-200/80 flex items-center justify-center text-indigo-700 text-xl shadow-inner">
+        <i class="fa-solid fa-graduation-cap"></i>
       </div>
     </div>
 
-    <!-- 核心兩欄版面 -->
-    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+    <!-- KPI 2: 本學期總收入 -->
+    <div class="bi-card bi-corner p-4 rounded-2xl flex items-center justify-between">
+      <div class="space-y-1">
+        <div class="flex items-center space-x-1.5 text-xs font-semibold text-slate-500">
+          <i class="fa-solid fa-wallet text-emerald-700"></i>
+          <span>班費本學期應收總額</span>
+        </div>
+        <div class="flex items-baseline space-x-1">
+          <span id="kpiIncome" class="text-3xl font-black text-emerald-800 font-mono-num">$8,400</span>
+        </div>
+        <p class="text-[11px] text-emerald-700 font-medium flex items-center">
+          <i class="fa-solid fa-circle-check mr-1 text-[10px]"></i>全班 28 生已全數建檔繳齊
+        </p>
+      </div>
+      <div class="w-12 h-12 rounded-2xl bg-emerald-50 border border-emerald-200/80 flex items-center justify-center text-emerald-700 text-xl shadow-inner">
+        <i class="fa-solid fa-sack-dollar"></i>
+      </div>
+    </div>
 
-      <!-- 左欄 (8 欄)：今日各節課表與 RDQ 生成的客製待辦 -->
-      <div class="lg:col-span-8 space-y-6">
+    <!-- KPI 3: 累計核銷支出 -->
+    <div class="bi-card bi-corner p-4 rounded-2xl flex items-center justify-between">
+      <div class="space-y-1">
+        <div class="flex items-center space-x-1.5 text-xs font-semibold text-slate-500">
+          <i class="fa-solid fa-file-invoice text-rose-700"></i>
+          <span>累計核銷支出金額</span>
+        </div>
+        <div class="flex items-baseline space-x-1">
+          <span id="kpiExpense" class="text-3xl font-black text-rose-700 font-mono-num">$0</span>
+        </div>
+        <p id="kpiExpenseCount" class="text-[11px] text-slate-500">目前 0 筆收據核銷</p>
+      </div>
+      <div class="w-12 h-12 rounded-2xl bg-rose-50 border border-rose-200/80 flex items-center justify-center text-rose-700 text-xl shadow-inner">
+        <i class="fa-solid fa-receipt"></i>
+      </div>
+    </div>
+
+    <!-- KPI 4: 班費目前結餘 -->
+    <div class="bi-card bi-corner p-4 rounded-2xl flex items-center justify-between">
+      <div class="space-y-1 w-full mr-3">
+        <div class="flex items-center space-x-1.5 text-xs font-semibold text-slate-500">
+          <i class="fa-solid fa-piggy-bank text-amber-700"></i>
+          <span>班費目前可用結餘</span>
+        </div>
+        <div class="flex items-baseline space-x-1">
+          <span id="kpiBalance" class="text-3xl font-black text-slate-900 font-mono-num">$8,400</span>
+        </div>
+        <!-- 結餘進度條 -->
+        <div class="w-full bg-slate-200/80 rounded-full h-2 overflow-hidden mt-1.5">
+          <div id="balanceProgressBar" class="bg-gradient-to-r from-emerald-600 to-teal-500 h-2 rounded-full transition-all duration-700" style="width: 100%"></div>
+        </div>
+      </div>
+      <div class="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200/80 flex items-center justify-center text-amber-700 text-xl shadow-inner shrink-0">
+        <i class="fa-solid fa-vault"></i>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================== 【主要 3 欄式大屏內容佈局】 ======================== -->
+  <main class="grid grid-cols-1 lg:grid-cols-12 gap-5 flex-grow">
+
+    <!-- ========== 左欄 (3 欄 / 12)：學生突發、常規紀錄、今日服裝與備課錦囊 ========== -->
+    <section class="lg:col-span-3 space-y-4 flex flex-col">
+      <!-- 服裝與作息卡 -->
+      <div class="bi-card bi-corner rounded-2xl p-4 space-y-3">
+        <div class="flex items-center justify-between pb-2 border-b border-stone-200/80">
+          <h2 class="text-xs font-bold text-slate-800 flex items-center gap-1.5 uppercase tracking-wide">
+            <i class="fa-solid fa-shirt text-amber-700"></i>
+            <span>今日服裝與作息規定</span>
+          </h2>
+          <span class="text-[10px] bg-stone-200/80 text-stone-700 font-bold px-2 py-0.5 rounded">304 專屬</span>
+        </div>
+        <div class="bg-white/80 p-3 rounded-xl border border-stone-200/70 space-y-1.5">
+          <div id="uniformBanner" class="text-sm font-bold text-slate-800">👕 今日服裝：載入中...</div>
+          <div id="dismissalBanner" class="text-xs text-stone-600 flex items-center gap-1">
+            <i class="fa-regular fa-clock text-stone-400"></i>
+            <span>放學時間：依日課表規定</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 學生突發事件與親師追蹤 -->
+      <div class="bi-card bi-corner rounded-2xl p-4 flex-grow flex flex-col space-y-3">
+        <div class="flex items-center justify-between pb-2 border-b border-stone-200/80">
+          <h2 class="text-xs font-bold text-slate-800 flex items-center gap-1.5 uppercase tracking-wide">
+            <i class="fa-solid fa-triangle-exclamation text-rose-600"></i>
+            <span>突發事件與親師追蹤</span>
+          </h2>
+          <span class="text-[10px] text-stone-500 font-medium">LINE 自動歸檔</span>
+        </div>
+        <div id="incidentsTimeline" class="space-y-2.5 overflow-y-auto max-h-72 pr-1">
+          <!-- 動態載入事件項目 -->
+          <div class="text-center py-6 text-xs text-stone-400">
+            <i class="fa-regular fa-circle-check text-emerald-600 text-lg mb-1 block"></i>
+            目前班級秩序良好，無待追蹤突發事件
+          </div>
+        </div>
+      </div>
+
+      <!-- 快速備課錦囊 (G4三階審查) -->
+      <div class="bi-card bi-corner rounded-2xl p-4 space-y-2.5">
+        <div class="flex items-center justify-between pb-2 border-b border-stone-200/80">
+          <h2 class="text-xs font-bold text-slate-800 flex items-center gap-1.5 uppercase tracking-wide">
+            <i class="fa-solid fa-lightbulb text-amber-600"></i>
+            <span>今日四年級備課小錦囊</span>
+          </h2>
+          <span class="text-[10px] text-emerald-700 font-semibold bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">G4審查認證</span>
+        </div>
+        <div class="text-xs text-stone-700 leading-relaxed bg-white/70 p-3 rounded-xl border border-stone-200/60 space-y-1.5">
+          <p>▫️ <b>南一數 ch04/05</b>：除法位值補零迷思、三角形內角和 180° 與量角器實測。</p>
+          <p>▫️ <b>翰林國 L05</b>：《月光下》形式深究、段落起承轉合、修辭摹寫仿寫。</p>
+          <p>▫️ <b>康軒社 1-3</b>：家鄉地圖圖例方位辨識、結合梧棲老街與臺中港區情境。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 中欄 (5 欄 / 12)：今日節次課表與三選一待辦建議清單 ========== -->
+    <section class="lg:col-span-5 space-y-4 flex flex-col">
+      <!-- 今日作息節次橫向看板 -->
+      <div class="bi-card bi-corner rounded-2xl p-4 space-y-3">
+        <div class="flex items-center justify-between pb-2 border-b border-stone-200/80">
+          <h2 class="text-xs font-bold text-slate-800 flex items-center gap-1.5 uppercase tracking-wide">
+            <i class="fa-regular fa-calendar-days text-indigo-700"></i>
+            <span id="scheduleHeaderTitle">今日課程節次安排</span>
+          </h2>
+          <span class="text-[10px] text-stone-500">週一/三半天 · 週二/四/五全天</span>
+        </div>
+        <!-- 節次橫向膠囊網格 -->
+        <div id="scheduleCapsulesGrid" class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          <!-- 動態載入節次膠囊 -->
+        </div>
+      </div>
+
+      <!-- 核心：早自修至第七節三選一待辦清單 -->
+      <div class="bi-card bi-corner rounded-2xl p-5 flex-grow flex flex-col space-y-3">
+        <div class="flex items-center justify-between pb-3 border-b border-stone-200/80">
+          <div>
+            <h2 class="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full bg-amber-600"></span>
+              <span>今日各節次三選一執行待辦建議</span>
+            </h2>
+            <p class="text-[11px] text-stone-500 mt-0.5">每日 06:30 晨間主動生成 · 20:00 晚間精準復盤</p>
+          </div>
+          <button onclick="copyTodayPlan()" class="text-[11px] bg-stone-200/80 hover:bg-stone-300/80 text-stone-800 font-bold px-2.5 py-1.5 rounded-lg flex items-center gap-1 transition">
+            <i class="fa-regular fa-copy"></i>
+            <span>複製清單</span>
+          </button>
+        </div>
+
+        <!-- 待辦文本展示框 (帆軟代辦清單風格) -->
+        <div class="bg-white/90 p-4 rounded-xl border border-stone-200/80 flex-grow overflow-y-auto max-h-[460px] text-xs leading-relaxed text-slate-800 whitespace-pre-wrap font-sans space-y-2 shadow-inner" id="todayPlanDetails">
+          載入今日各節次三選一待辦清單中...
+        </div>
+
+        <!-- 網頁端快捷按鈕列 -->
+        <div class="pt-2 flex flex-wrap items-center justify-between gap-2 border-t border-stone-200/70 text-xs">
+          <span class="text-[11px] text-stone-500">
+            <i class="fa-solid fa-mobile-screen-button text-stone-400 mr-1"></i>在 LINE 回傳「臨時改變進度」即可隨時改課
+          </span>
+          <div class="flex items-center gap-2">
+            <a href="https://line.me/R/ti/p/@696jsjpl" target="_blank" class="bg-stone-800 hover:bg-black text-white px-3 py-1.5 rounded-lg font-bold text-[11px] flex items-center gap-1 transition">
+              <i class="fa-brands fa-line text-emerald-400 text-sm"></i>
+              <span>開啟助手阿元</span>
+            </a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 右欄 (4 欄 / 12)：班費收支動態分析、最新明細、行事曆與課務重整 ========== -->
+    <section class="lg:col-span-4 space-y-4 flex flex-col">
+      <!-- 學校重大行事曆與近週事件 -->
+      <div class="bi-card bi-corner rounded-2xl p-4 space-y-3">
+        <div class="flex items-center justify-between pb-2 border-b border-stone-200/80">
+          <h2 class="text-xs font-bold text-slate-800 flex items-center gap-1.5 uppercase tracking-wide">
+            <i class="fa-solid fa-bell text-amber-600"></i>
+            <span>梧棲中正國小重要行事</span>
+          </h2>
+          <span class="text-[10px] text-stone-500">115-1 簡曆</span>
+        </div>
+        <div id="upcomingEventsList" class="space-y-2">
+          <!-- 動態載入行事 -->
+        </div>
+      </div>
+
+      <!-- 班費收支類別分析 (FineReport 類別長條圖結構) -->
+      <div class="bi-card bi-corner rounded-2xl p-4 space-y-3">
+        <div class="flex items-center justify-between pb-2 border-b border-stone-200/80">
+          <h2 class="text-xs font-bold text-slate-800 flex items-center gap-1.5 uppercase tracking-wide">
+            <i class="fa-solid fa-chart-pie text-emerald-700"></i>
+            <span>班費支出類別分佈</span>
+          </h2>
+          <span class="text-[10px] text-stone-500">實報實銷</span>
+        </div>
         
-        <!-- 今日各節待辦與教學指引 -->
-        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          <div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-            <div class="flex items-center space-x-2.5">
-              <span class="w-3 h-3 rounded-full bg-indigo-500"></span>
-              <h2 class="text-base font-bold text-slate-900">今日各節次待辦與教學建議（早自習至第七節）</h2>
+        <!-- 四類支出進度條 -->
+        <div class="space-y-2.5 text-xs">
+          <div>
+            <div class="flex justify-between font-medium text-slate-700 mb-1">
+              <span>文具與教材印製</span>
+              <span id="catExpStationery" class="font-mono-num font-bold">$0</span>
             </div>
-            <span class="text-xs text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-md font-medium">由 Gemini 結合 RDQ 自動規劃</span>
+            <div class="w-full bg-stone-200/80 rounded-full h-1.5 overflow-hidden">
+              <div id="barStationery" class="bg-indigo-600 h-1.5 rounded-full" style="width: 0%"></div>
+            </div>
           </div>
-          <div class="p-6">
-            <div id="todayPlanContent" class="prose prose-sm max-w-none text-slate-700 whitespace-pre-wrap leading-relaxed">
-              載入今日各節次教學建議中...
+
+          <div>
+            <div class="flex justify-between font-medium text-slate-700 mb-1">
+              <span>班級活動與點心獎勵</span>
+              <span id="catExpSnacks" class="font-mono-num font-bold">$0</span>
+            </div>
+            <div class="w-full bg-stone-200/80 rounded-full h-1.5 overflow-hidden">
+              <div id="barSnacks" class="bg-amber-600 h-1.5 rounded-full" style="width: 0%"></div>
+            </div>
+          </div>
+
+          <div>
+            <div class="flex justify-between font-medium text-slate-700 mb-1">
+              <span>教室佈置與生活常規</span>
+              <span id="catExpDecor" class="font-mono-num font-bold">$0</span>
+            </div>
+            <div class="w-full bg-stone-200/80 rounded-full h-1.5 overflow-hidden">
+              <div id="barDecor" class="bg-emerald-600 h-1.5 rounded-full" style="width: 0%"></div>
+            </div>
+          </div>
+
+          <div>
+            <div class="flex justify-between font-medium text-slate-700 mb-1">
+              <span>各類雜支與臨時支出</span>
+              <span id="catExpMisc" class="font-mono-num font-bold">$0</span>
+            </div>
+            <div class="w-full bg-stone-200/80 rounded-full h-1.5 overflow-hidden">
+              <div id="barMisc" class="bg-stone-500 h-1.5 rounded-full" style="width: 0%"></div>
             </div>
           </div>
         </div>
-
-        <!-- 今日課表節次清單 -->
-        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          <div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-            <div class="flex items-center space-x-2.5">
-              <i class="fa-regular fa-clock text-indigo-500"></i>
-              <h2 class="text-base font-bold text-slate-900">今日作息課表</h2>
-            </div>
-          </div>
-          <div class="p-6">
-            <div id="scheduleTimeline" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-              <!-- 動態填入課表節次 -->
-            </div>
-          </div>
-        </div>
-
-        <!-- 學生突發事件與親師追蹤 -->
-        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          <div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-            <div class="flex items-center space-x-2.5">
-              <i class="fa-solid fa-triangle-exclamation text-amber-500"></i>
-              <h2 class="text-base font-bold text-slate-900">學生突發事件與追蹤記錄</h2>
-            </div>
-            <span class="text-xs text-slate-500">LINE 傳送文字或照片自動記錄</span>
-          </div>
-          <div class="p-6">
-            <div id="incidentsList" class="space-y-3">
-              <p class="text-sm text-slate-400 py-4 text-center">暫無突發事件紀錄，班級秩序良好！</p>
-            </div>
-          </div>
-        </div>
-
       </div>
 
-      <!-- 右欄 (4 欄)：班費收支明細與學校行事曆 -->
-      <div class="lg:col-span-4 space-y-6">
-
-        <!-- 學校重大行事 -->
-        <div class="bg-gradient-to-br from-indigo-50 to-blue-50/50 border border-indigo-100 rounded-2xl p-5 shadow-sm">
-          <div class="flex items-center space-x-2 text-indigo-800 font-bold mb-3">
-            <i class="fa-regular fa-calendar-check text-indigo-600"></i>
-            <h3>學校今日行事提示</h3>
-          </div>
-          <div id="calendarEventsList" class="text-sm text-slate-700 space-y-2">
-            <div class="bg-white/80 p-3 rounded-xl border border-indigo-100/60 text-xs">
-              查無全校重大行事，依正常課表作息。
-            </div>
-          </div>
+      <!-- 班費最新收據核銷流水帳 -->
+      <div class="bi-card bi-corner rounded-2xl p-4 flex-grow flex flex-col space-y-3">
+        <div class="flex items-center justify-between pb-2 border-b border-stone-200/80">
+          <h2 class="text-xs font-bold text-slate-800 flex items-center gap-1.5 uppercase tracking-wide">
+            <i class="fa-solid fa-receipt text-slate-600"></i>
+            <span>最新收據核銷明細</span>
+          </h2>
+          <span class="text-[10px] text-stone-500">拍照即自動記帳</span>
         </div>
-
-        <!-- 班費近期支出明細卡 -->
-        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          <div class="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-            <div class="flex items-center space-x-2">
-              <i class="fa-solid fa-file-invoice-dollar text-slate-600"></i>
-              <h2 class="text-base font-bold text-slate-900">班費收支最新明細</h2>
-            </div>
-          </div>
-          <div class="divide-y divide-slate-100 max-h-96 overflow-y-auto" id="expensesList">
-            <!-- 動態明細項目 -->
-          </div>
-          <div class="p-4 bg-slate-50 border-t border-slate-100 text-center">
-            <p class="text-xs text-slate-500">
-              <i class="fa-solid fa-camera mr-1"></i>在 LINE 傳送廠商明細相片即可自動辨識入帳
-            </p>
-          </div>
+        <div class="divide-y divide-stone-200/70 overflow-y-auto max-h-52 pr-1" id="recentExpensesTable">
+          <!-- 動態載入明細 -->
         </div>
-
-        <!-- 快速功能指引 -->
-        <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-3 text-xs text-slate-600">
-          <h4 class="font-bold text-slate-800 flex items-center">
-            <i class="fa-solid fa-wand-magic-sparkles text-indigo-500 mr-2"></i>LINE 指令小秘訣
-          </h4>
-          <ul class="space-y-1.5 list-disc pl-4 text-slate-500 leading-relaxed">
-            <li>回傳「<b class="text-slate-700">下班復盤</b>」：啟動 RDQ 3 題訪談，自動規劃明日各節待辦。</li>
-            <li>回傳「<b class="text-slate-700">今日行程</b>」：即時調閱當日課表與行事提醒。</li>
-            <li>回傳「<b class="text-slate-700">班費收支</b>」：查詢目前班費總結餘與收支狀況。</li>
-            <li>傳送「<b class="text-slate-700">發票/收據照片</b>」：AI 自動辨識金額、廠商、品項並記帳。</li>
-          </ul>
-        </div>
-
       </div>
 
-    </div>
+      <!-- 課務控制中心：改進度與重設藍圖 -->
+      <div class="bg-stone-800 text-stone-200 rounded-2xl p-4 space-y-2 border border-stone-700 shadow-md">
+        <div class="flex items-center justify-between text-xs font-bold text-amber-300">
+          <span class="flex items-center gap-1.5">
+            <i class="fa-solid fa-sliders"></i>
+            <span>課務彈性控制指南</span>
+          </span>
+          <span class="text-[10px] bg-amber-400/20 text-amber-300 px-1.5 py-0.5 rounded">雙向支援</span>
+        </div>
+        <div class="text-[11px] text-stone-300 leading-relaxed space-y-1">
+          <p>• <b>臨時改變進度</b>：在 LINE 說「第二節改上數學」，即時換課。</p>
+          <p>• <b>重新設計進度</b>：在 LINE 說「重新設計進度」，自動錨定期中考三軌藍圖。</p>
+        </div>
+      </div>
+    </section>
 
   </main>
 
-  <!-- 頁尾 -->
-  <footer class="bg-white border-t border-slate-200 py-4 mt-auto">
-    <div class="max-w-7xl mx-auto px-4 text-center text-xs text-slate-400">
-      國小中年級導師 LINE 智慧助教系統 · Powered by Google Apps Script & Gemini 2.5 Flash
-    </div>
+  <!-- ======================== 【頁尾資訊列】 ======================== -->
+  <footer class="text-center py-2 text-xs text-stone-600 space-y-0.5">
+    <p>臺中市梧棲區中正國民小學 四年丙班 (304班) 導師專屬智慧助教系統</p>
+    <p class="text-[10px] text-stone-500 font-mono">Design Style: FineReport BI Cockpit · Color Tone: Dulux 30YY 69/048 (淺灘銀珠)</p>
   </footer>
 
-  <!-- 前端資料取得與渲染 Script -->
+  <!-- ======================== 【前端資料載入與即時渲染 Script】 ======================== -->
   <script>
-    function refreshData() {
-      const dateBadge = document.getElementById('currentDateBadge');
-      dateBadge.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1.5"></i>更新中...';
+    // 即時數位時鐘
+    function updateLiveClock() {
+      const now = new Date();
+      const timeStr = now.toTimeString().split(' ')[0];
+      document.getElementById('liveClock').innerText = timeStr;
+    }
+    setInterval(updateLiveClock, 1000);
+    updateLiveClock();
 
+    // 複製今日待辦
+    function copyTodayPlan() {
+      const text = document.getElementById('todayPlanDetails').innerText;
+      navigator.clipboard.writeText(text).then(() => {
+        alert('✅ 已複製今日節次待辦清單至剪貼簿！');
+      }).catch(err => {
+        alert('複製失敗，請手動選取：' + err);
+      });
+    }
+
+    // 重新載入儀表板資料
+    function refreshDashboardData() {
+      document.getElementById('dateDisplay').innerText = '資料更新中...';
       google.script.run
         .withSuccessHandler(renderDashboard)
         .withFailureHandler(function(err) {
-          alert('取得資料失敗: ' + err);
+          alert('取得駕駛艙資料失敗: ' + err);
         })
         .getDashboardData();
     }
 
+    // 渲染駕駛艙畫面
     function renderDashboard(data) {
-      // 1. 日期標籤
-      const dateBadge = document.getElementById('currentDateBadge');
-      dateBadge.innerHTML = `<i class="fa-regular fa-calendar-days mr-1.5"></i>${data.today}（星期${data.dayZh}）`;
+      // 1. 日期與星期
+      document.getElementById('dateDisplay').innerText = `${data.today}（星期${data.dayZh}）`;
+      document.getElementById('scheduleHeaderTitle').innerText = `今日課程節次安排（週${data.dayZh}）`;
 
-      // 2. 統計卡
-      document.getElementById('statStudents').innerHTML = `${data.finance.studentCount} <span class="text-sm font-normal text-slate-500">人</span>`;
-      document.getElementById('statIncome').innerText = `$${data.finance.totalIncome.toLocaleString()}`;
-      document.getElementById('statExpense').innerText = `$${data.finance.totalExpense.toLocaleString()}`;
-      document.getElementById('statBalance').innerText = `$${data.finance.balance.toLocaleString()}`;
-      document.getElementById('statExpenseCount').innerText = `${data.recentExpenses.length} 筆收據核銷`;
+      // 2. 期中考倒數
+      document.getElementById('examCountdownDays').innerText = data.examCountdown;
 
-      const pct = data.finance.totalIncome > 0 ? (data.finance.balance / data.finance.totalIncome) * 100 : 100;
-      document.getElementById('balanceProgress').style.width = Math.max(0, Math.min(100, pct)) + '%';
+      // 3. 服裝與作息
+      document.getElementById('uniformBanner').innerHTML = `👗 <b>服裝規定</b>：${data.uniform || '便服'}`;
+      const isHalfDay = (data.dayZh === '一' || data.dayZh === '三');
+      document.getElementById('dismissalBanner').innerHTML = `
+        <i class="fa-regular fa-clock text-stone-400"></i>
+        <span>放學時間：<b>${isHalfDay ? '中午 12:00 放學（半天課）' : '下午 15:50 放學（全天課）'}</b></span>
+      `;
 
-      // 3. 今日節次待辦
-      const planDiv = document.getElementById('todayPlanContent');
-      planDiv.innerText = data.todayPlan;
+      // 4. 頂部 KPI 卡片
+      document.getElementById('kpiStudents').innerText = data.finance.studentCount;
+      document.getElementById('kpiIncome').innerText = `$${data.finance.totalIncome.toLocaleString()}`;
+      document.getElementById('kpiExpense').innerText = `-$${data.finance.totalExpense.toLocaleString()}`;
+      document.getElementById('kpiBalance').innerText = `$${data.finance.balance.toLocaleString()}`;
+      document.getElementById('kpiExpenseCount').innerText = `${data.recentExpenses.length} 筆已核銷明細`;
 
-      // 4. 今日課表
-      const scheduleBox = document.getElementById('scheduleTimeline');
-      scheduleBox.innerHTML = '';
+      const balancePct = data.finance.totalIncome > 0 ? (data.finance.balance / data.finance.totalIncome) * 100 : 100;
+      document.getElementById('balanceProgressBar').style.width = Math.max(0, Math.min(100, balancePct)) + '%';
+
+      // 5. 今日節次作息膠囊 (中欄上方)
+      const capsuleGrid = document.getElementById('scheduleCapsulesGrid');
+      capsuleGrid.innerHTML = '';
       if (data.schedule && data.schedule.length > 0) {
         data.schedule.forEach(s => {
-          const isHome = s.type === '導師課';
-          scheduleBox.innerHTML += `
-            <div class="p-3 rounded-xl border ${isHome ? 'border-indigo-200 bg-indigo-50/40' : 'border-slate-200 bg-slate-50/60'}">
-              <span class="text-[10px] font-bold px-1.5 py-0.5 rounded ${isHome ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-600'}">${s.type}</span>
-              <h4 class="text-sm font-bold text-slate-800 mt-1">${s.subject}</h4>
-              <p class="text-xs text-slate-500 mt-0.5">${s.period}</p>
+          const isHome = (s.type === '導師課');
+          capsuleGrid.innerHTML += `
+            <div class="p-2.5 rounded-xl border ${isHome ? 'border-amber-700/30 bg-amber-50/70' : 'border-stone-300/80 bg-white/70'} flex flex-col justify-between">
+              <div class="flex items-center justify-between text-[10px]">
+                <span class="font-bold px-1.5 py-0.2 rounded ${isHome ? 'bg-amber-800 text-white' : 'bg-stone-200 text-stone-700'}">${s.type}</span>
+              </div>
+              <div class="text-xs font-bold text-slate-800 mt-1">${s.subject}</div>
+              <div class="text-[10px] text-stone-500 truncate mt-0.5">${s.period.split(' ')[0]}</div>
             </div>
           `;
         });
       }
 
-      // 5. 學校行事曆
-      const calBox = document.getElementById('calendarEventsList');
-      calBox.innerHTML = '';
-      if (data.calendarEvents && data.calendarEvents.length > 0) {
-        data.calendarEvents.forEach(ev => {
-          calBox.innerHTML += `
-            <div class="bg-white p-3 rounded-xl border border-indigo-200/80 text-xs shadow-xs flex items-center space-x-2">
-              <i class="fa-solid fa-bell text-indigo-500"></i>
-              <span class="font-medium text-slate-800">${ev}</span>
+      // 6. 今日客製待辦
+      document.getElementById('todayPlanDetails').innerText = data.todayPlan;
+
+      // 7. 近期學校行事 (右欄上方)
+      const eventsBox = document.getElementById('upcomingEventsList');
+      eventsBox.innerHTML = '';
+      if (data.upcomingEvents && data.upcomingEvents.length > 0) {
+        data.upcomingEvents.forEach(ev => {
+          eventsBox.innerHTML += `
+            <div class="bg-white/80 p-2.5 rounded-xl border border-stone-200/70 text-xs flex items-center justify-between">
+              <div>
+                <span class="font-bold text-slate-800">${ev.name}</span>
+                <p class="text-[10px] text-stone-500">${ev.note || '校務活動'}</p>
+              </div>
+              <span class="text-[10px] font-mono-num font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">${ev.date.substring(5)}</span>
             </div>
           `;
         });
       } else {
-        calBox.innerHTML = '<div class="bg-white/80 p-3 rounded-xl border border-indigo-100/60 text-xs text-slate-500">今日無全校重大行事，照常教學。</div>';
+        eventsBox.innerHTML = '<div class="text-center py-3 text-xs text-stone-400">近期無重大行事</div>';
       }
 
-      // 6. 突發事件清單
-      const incBox = document.getElementById('incidentsList');
-      incBox.innerHTML = '';
+      // 8. 班費支出類別分佈
+      const cats = data.finance.categories || {};
+      const totExp = data.finance.totalExpense > 0 ? data.finance.totalExpense : 1;
+      
+      const stAmt = cats['文具教材'] || 0;
+      const snAmt = cats['活動點心'] || 0;
+      const dcAmt = cats['教室佈置'] || 0;
+      const msAmt = cats['各類雜支'] || 0;
+
+      document.getElementById('catExpStationery').innerText = `$${stAmt.toLocaleString()}`;
+      document.getElementById('barStationery').style.width = Math.min(100, (stAmt / totExp) * 100) + '%';
+
+      document.getElementById('catExpSnacks').innerText = `$${snAmt.toLocaleString()}`;
+      document.getElementById('barSnacks').style.width = Math.min(100, (snAmt / totExp) * 100) + '%';
+
+      document.getElementById('catExpDecor').innerText = `$${dcAmt.toLocaleString()}`;
+      document.getElementById('barDecor').style.width = Math.min(100, (dcAmt / totExp) * 100) + '%';
+
+      document.getElementById('catExpMisc').innerText = `$${msAmt.toLocaleString()}`;
+      document.getElementById('barMisc').style.width = Math.min(100, (msAmt / totExp) * 100) + '%';
+
+      // 9. 最新收據核銷列表
+      const expTable = document.getElementById('recentExpensesTable');
+      expTable.innerHTML = '';
+      if (data.recentExpenses && data.recentExpenses.length > 0) {
+        data.recentExpenses.forEach(e => {
+          expTable.innerHTML += `
+            <div class="py-2.5 flex items-center justify-between text-xs">
+              <div>
+                <div class="font-bold text-slate-800">${e.item}</div>
+                <div class="text-[10px] text-stone-500">${e.date} · ${e.vendor} · <span class="text-amber-800">${e.category}</span></div>
+              </div>
+              <div class="text-right font-mono-num font-bold text-rose-700">
+                -$${e.amount.toLocaleString()}
+              </div>
+            </div>
+          `;
+        });
+      } else {
+        expTable.innerHTML = '<div class="text-center py-5 text-xs text-stone-400">目前尚無核銷支出紀錄</div>';
+      }
+
+      // 10. 學生突發事件時間軸 (左欄)
+      const incTimeline = document.getElementById('incidentsTimeline');
+      incTimeline.innerHTML = '';
       if (data.recentIncidents && data.recentIncidents.length > 0) {
         data.recentIncidents.forEach(inc => {
-          incBox.innerHTML += `
-            <div class="p-3.5 rounded-xl border border-slate-200 bg-slate-50/50 flex flex-col space-y-1">
-              <div class="flex justify-between items-center">
-                <div class="flex items-center space-x-2">
-                  <span class="px-2 py-0.5 rounded-md text-xs font-semibold bg-amber-100 text-amber-800">${inc.type}</span>
-                  <span class="text-xs font-bold text-slate-800">${inc.student}</span>
-                </div>
-                <span class="text-[11px] text-slate-400">${inc.time}</span>
+          incTimeline.innerHTML += `
+            <div class="bg-white/85 p-3 rounded-xl border border-stone-200/80 text-xs space-y-1">
+              <div class="flex items-center justify-between">
+                <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-900">${inc.type}</span>
+                <span class="text-[10px] font-mono-num text-stone-400">${inc.time}</span>
               </div>
-              <p class="text-xs text-slate-700 leading-relaxed">${inc.description}</p>
+              <div class="font-bold text-slate-800">${inc.student}</div>
+              <p class="text-[11px] text-stone-600 leading-normal">${inc.description}</p>
             </div>
           `;
         });
       } else {
-        incBox.innerHTML = '<p class="text-sm text-slate-400 py-4 text-center">暫無突發事件紀錄，班級秩序良好！</p>';
-      }
-
-      // 7. 班費收支明細
-      const expBox = document.getElementById('expensesList');
-      expBox.innerHTML = '';
-      if (data.recentExpenses && data.recentExpenses.length > 0) {
-        data.recentExpenses.forEach(exp => {
-          expBox.innerHTML += `
-            <div class="p-4 flex items-center justify-between hover:bg-slate-50 transition">
-              <div>
-                <div class="flex items-center space-x-2">
-                  <span class="text-xs font-bold text-slate-800">${exp.item}</span>
-                  <span class="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded">${exp.category}</span>
-                </div>
-                <p class="text-xs text-slate-400 mt-0.5">${exp.date} · ${exp.vendor}</p>
-              </div>
-              <div class="text-right">
-                <span class="text-sm font-extrabold text-rose-600">-$${exp.amount.toLocaleString()}</span>
-              </div>
-            </div>
-          `;
-        });
-      } else {
-        expBox.innerHTML = '<div class="p-6 text-center text-xs text-slate-400">尚無核銷支出紀錄</div>';
+        incTimeline.innerHTML = `
+          <div class="text-center py-8 text-xs text-stone-400">
+            <i class="fa-regular fa-circle-check text-emerald-600 text-lg mb-1 block"></i>
+            目前班級秩序良好，無待追蹤突發事件
+          </div>
+        `;
       }
     }
 
-    // 初始化自動加載
+    // 頁面載入時自動刷新資料
     window.onload = function() {
-      refreshData();
+      refreshDashboardData();
     };
   </script>
 </body>

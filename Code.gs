@@ -25,7 +25,7 @@ const CONFIG = {
   
   // Google Gemini API Key (https://aistudio.google.com/app/apikey)
   GEMINI_API_KEY: SCRIPT_PROPERTIES.getProperty('GEMINI_API_KEY') || 'YOUR_GEMINI_API_KEY',
-  GEMINI_MODEL: 'gemini-2.5-flash', // 或 gemini-1.5-flash
+  GEMINI_MODEL: 'gemini-3.8-flash', // 最新穩定模型
 
   // 班級基本設定 (RDQ 訪談確認值：28人，每人300元)
   STUDENT_COUNT: 28,
@@ -827,6 +827,7 @@ function getDashboardData() {
   let totalExpense = 0;
   let expenses = [];
   let incidents = [];
+  let categoryMap = { '文具教材': 0, '活動點心': 0, '教室佈置': 0, '各類雜支': 0 };
 
   const ss = getSpreadsheet();
 
@@ -837,10 +838,13 @@ function getDashboardData() {
     expenses = data.map(r => {
       const amt = Number(r[4]) || 0;
       totalExpense += amt;
+      const cat = r[2] || '各類雜支';
+      if (!categoryMap[cat]) categoryMap[cat] = 0;
+      categoryMap[cat] += amt;
       return {
         date: Utilities.formatDate(new Date(r[0]), 'GMT+8', 'yyyy-MM-dd'),
         item: r[1],
-        category: r[2],
+        category: cat,
         vendor: r[3],
         amount: amt,
         note: r[5]
@@ -862,25 +866,59 @@ function getDashboardData() {
   }
 
   // 3. 今日待辦
-  const currentPlan = getSavedPlan(todayStr) || '今日尚未產生客製化節次待辦（可透過下班 RDQ 自動產出）';
+  const currentPlan = getSavedPlan(todayStr) || '今日尚未產生客製化節次待辦（可於 06:30 晨間或 20:00 復盤自動產出）';
+
+  // 4. 計算期中考倒數（2026-11-05）
+  const examDate = new Date('2026-11-05');
+  const diffTime = examDate.getTime() - today.getTime();
+  const examCountdown = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+  // 5. 抓取近期 5 筆學校行事
+  const upcomingEvents = getUpcomingCalendarEvents(todayStr, 6);
 
   return {
     className: CONFIG.CLASS_NAME,
     today: todayStr,
     dayZh: dayZh,
+    uniform: CONFIG.UNIFORMS[dayZh] || '便服',
+    examCountdown: examCountdown > 0 ? examCountdown : 0,
     finance: {
       studentCount: CONFIG.STUDENT_COUNT,
       feePerStudent: CONFIG.CLASS_FEE_PER_STUDENT,
       totalIncome: totalIncome,
       totalExpense: totalExpense,
-      balance: totalIncome - totalExpense
+      balance: totalIncome - totalExpense,
+      categories: categoryMap
     },
     schedule: getScheduleByDay(dayZh),
     calendarEvents: getCalendarEvents(todayStr),
+    upcomingEvents: upcomingEvents,
     todayPlan: currentPlan,
     recentExpenses: expenses.slice(0, 10),
     recentIncidents: incidents.slice(0, 10)
   };
+}
+
+function getUpcomingCalendarEvents(fromDateStr, limit) {
+  const ss = getSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.SHEETS.CALENDAR);
+  if (!sheet || sheet.getLastRow() <= 1) return [];
+
+  const data = sheet.getDataRange().getValues();
+  const list = [];
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    const rowDateStr = Utilities.formatDate(new Date(row[0]), 'GMT+8', 'yyyy-MM-dd');
+    if (rowDateStr >= fromDateStr) {
+      list.push({
+        date: rowDateStr,
+        name: row[1],
+        note: row[2] || ''
+      });
+      if (list.length >= (limit || 6)) break;
+    }
+  }
+  return list;
 }
 
 // ======================== 【Gemini API 底層呼叫模組】 ========================
