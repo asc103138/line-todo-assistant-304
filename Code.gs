@@ -186,17 +186,36 @@ function handleIncomingMessage(event) {
   if (message.type === 'text') {
     const text = message.text.trim();
 
-    // 檢查是否處於主動式交談狀態機（06:30 晨間安排確認 或 20:00 晚間復盤）
-    const session = getSessionState(userId);
-    if (session) {
-      if (session.state === 'MORNING_PENDING') {
-        handleMorningConfirmation(userId, text, replyToken);
-        return;
+    // 優先檢查圖文選單與頂層關鍵指令（絕不被狀態機卡住）
+    const commandList = [
+      '今日行程', '今日課表',
+      '下班復盤', '下班RDQ', '開始復盤', '晚間復盤',
+      '晨間安排', '晨間建議',
+      '臨時改變進度', '改進度', '調整進度', '臨時改課',
+      '重新設計進度', '重新設計課程進度', '重排進度', '重新規劃進度',
+      '班費收支', '班費結餘',
+      '學生突發', '學生事件',
+      '快速備課', '備課指引',
+      '個人儀表板', '開啟儀表板',
+      '重置狀態', '重置復盤'
+    ];
+
+    if (!commandList.includes(text)) {
+      // 只有在非頂層指令時，才檢查是否處於待確認狀態
+      const session = getSessionState(userId);
+      if (session) {
+        if (session.state === 'MORNING_PENDING') {
+          handleMorningConfirmation(userId, text, replyToken);
+          return;
+        }
+        if (session.state === 'EVENING_PENDING') {
+          handleEveningConfirmation(userId, text, replyToken);
+          return;
+        }
       }
-      if (session.state === 'EVENING_PENDING') {
-        handleEveningConfirmation(userId, text, replyToken);
-        return;
-      }
+    } else {
+      // 若點選頂層指令，重置當前狀態以防衝突
+      clearSessionState(userId);
     }
 
     // 圖文選單與關鍵字分流
@@ -491,90 +510,118 @@ ${finalPlan}
  */
 function triggerEveningInteractiveReview(targetUserId, replyToken) {
   const teacherId = targetUserId || CONFIG.TEACHER_USER_ID;
-  if (!teacherId) return;
+  if (!teacherId && !replyToken) return;
 
   const today = new Date();
   const dayOfWeek = today.getDay();
-  if (dayOfWeek === 0 || dayOfWeek === 6) {
-    const msg = '☕ 週末放假好好休息！週日晚間 20:00 我會自動為您梳理週一的課程與行事建議！';
-    if (replyToken) replyTextMessage(replyToken, msg);
-    return;
-  }
-
   const todayStr = Utilities.formatDate(today, 'GMT+8', 'yyyy-MM-dd');
   const dayZh = getDayOfWeekZh(dayOfWeek);
   const todaySchedule = getScheduleByDay(dayZh);
   const todayPlan = getSavedPlan(todayStr) || '今日照常規課表進行';
 
-  // 明日資訊
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
+  // 決定展望的「目標上課日」：
+  // 若是週五或週末，下一個正式上課日為「下週一」；平日則為「明天」
+  let targetDate = new Date(today.getTime());
+  let isWeekendAhead = false;
+
+  if (dayOfWeek === 5) { // 週五 ➔ 展望下週一
+    targetDate.setDate(targetDate.getDate() + 3);
+    isWeekendAhead = true;
+  } else if (dayOfWeek === 6) { // 週六 ➔ 展望下週一
+    targetDate.setDate(targetDate.getDate() + 2);
+    isWeekendAhead = true;
+  } else if (dayOfWeek === 0) { // 週日 ➔ 展望明天週一
+    targetDate.setDate(targetDate.getDate() + 1);
+  } else {
+    targetDate.setDate(targetDate.getDate() + 1);
+  }
+
+  const targetDateStr = Utilities.formatDate(targetDate, 'GMT+8', 'yyyy-MM-dd');
+  const targetDayZh = getDayOfWeekZh(targetDate.getDay());
+  const targetSchedule = getScheduleByDay(targetDayZh);
+  const targetCalendar = getCalendarEvents(targetDateStr);
+  const targetUniform = CONFIG.UNIFORMS[targetDayZh] || '便服';
+
+  // 取得週末明日（週六）可能有的全校特別行事（如校慶運動會）
+  const tomorrow = new Date(today.getTime() + 86400000);
   const tomorrowStr = Utilities.formatDate(tomorrow, 'GMT+8', 'yyyy-MM-dd');
-  const tomorrowDayZh = getDayOfWeekZh(tomorrow.getDay());
-  const tomorrowSchedule = getScheduleByDay(tomorrowDayZh);
-  const tomorrowCalendar = getCalendarEvents(tomorrowStr);
-  const tomorrowUniform = CONFIG.UNIFORMS[tomorrowDayZh] || '便服';
+  const weekendEvents = getCalendarEvents(tomorrowStr);
 
   // 今日突發事件
   const recentIncidents = getRecentIncidents(todayStr);
 
   const prompt = `你是一名【臺中市梧棲區中正國小 四年丙班 (304班)】的資深教學助教。
-現在是晚間 20:00 復盤時間。
+現在是復盤時間。
 
 ${getCurriculumPromptContext()}
 
-【今日回顧】：
-- 今日（${todayStr} 週${dayZh}）課表：${JSON.stringify(todaySchedule)}
-- 今晨確認之待辦與交辦：${todayPlan}
+【今日（${todayStr} 週${dayZh}）教學回顧】：
+- 今日課表：${JSON.stringify(todaySchedule)}
+- 今晨確認之待辦規劃：${todayPlan}
 - 今日記錄之突發事件：${recentIncidents.length > 0 ? recentIncidents.join('；') : '無特殊突發紀錄，常規良好'}
 
-【明日展望】：
-- 明日（${tomorrowStr} 週${tomorrowDayZh}）課表：${JSON.stringify(tomorrowSchedule)}
-- 明日學校重大行事：${tomorrowCalendar.length > 0 ? tomorrowCalendar.join('、') : '常規教學日'}
-- 明日學生服裝與放學：${tomorrowUniform}
+【下一個教學日（${targetDateStr} 週${targetDayZh}）展望】：
+- 服裝規定：${targetUniform}
+- 課表節次：${JSON.stringify(targetSchedule)}
+- 當日學校重大行事：${targetCalendar.length > 0 ? targetCalendar.join('、') : '常規教學日'}
+${isWeekendAhead ? `- 週末行事提醒（${tomorrowStr}）：${weekendEvents.length > 0 ? weekendEvents.join('、') : '週末放假好好休息'}` : ''}
 
-【核心任務要求 - 明日各節次皆提供三種具體選項】：
-不要叫老師從零打字填空！請根據今日實際進度與明日課表，主動梳理今日狀況，並為【明日每一節課（早自修至第七節）】精確規劃 3 種切合上述真實進度基準線（數學已教完進入複習、國語未教第6課第四段與統整活動一二、社會未教第二單元、作文尚缺一篇、下週五製作期中考前範圍圖發送給家長）之課堂待辦建議：
-- [A] 標準進度：南一數複習精熟/翰林國未教單元講授/康軒社第二單元推進。
-- [B] 精練補救：習作加強、易錯迷思補救（除法退位補零、等腰三角形性質、國語形式深究練習）。
+【核心任務要求 - 為下個教學日（週${targetDayZh}）早自修至放學每節課提供三種具體選項】：
+不要叫老師從零打字填空！請根據今日實際進度與下個教學日（週${targetDayZh}）課表，梳理狀況，並為【早自修至放學的每一節課】精確規劃 3 種切合上述真實進度基準線（南一數已教完進入複習精熟、翰林國未教第6課第四段與統整活動一二、康軒社未教第二單元、作文缺一篇、10/30製作期中考前範圍圖）之備選建議：
+- [A] 標準進度：南一數複習精熟/翰林國未教單元概念講授/康軒社第二單元核心概念導讀。
+- [B] 精練補救：習作加強、易錯迷思補救（除法退位補零、等腰三角形性質、字音字形雙向細目練習）。
 - [C] 探究實作：梧棲海線在地連結（臺中港/高美濕地/九降風/老街三合院）、小組發表或活動。
+（若為科任課，則提供三種帶隊、用具檢查與秩序叮嚀選項）
 
-請輸出結構清晰的繁體中文：
-1. 🌙 今日復盤摘要（課堂完成度、臨時交辦執行狀態）
-2. 📋 明日課表節次三選一提案：
+請輸出結構清晰、條列明確的繁體中文：
+1. 🌙 今日復盤摘要（課堂完成度回顧）
+2. 📋 下一個教學日（${targetDateStr} 週${targetDayZh}）各節次三選一提案：
    ▫️ 早自修 (07:50-08:40)：[A]... | [B]... | [C]...
    ▫️ 第一節 (08:45-09:25) [科目]：[A]... | [B]... | [C]...
    ▫️ 第二節 (09:35-10:15) [科目]：[A]... | [B]... | [C]...
-   ...依明日節次依序展開...
+   ...依週${targetDayZh}節次依序展開...
+   ▫️ 午餐/放學：注意事項
 3. 提示導師：「可回傳『全選A』、『全選B』，或指定微調。亦可點選下方按鈕臨時改變進度或重新設計進度！」`;
 
-  const reviewProposal = callGeminiText(prompt);
+  try {
+    const reviewProposal = callGeminiText(prompt);
 
-  saveSessionState(teacherId, 'EVENING_PENDING', {
-    todayStr: todayStr,
-    tomorrowStr: tomorrowStr,
-    tomorrowDayZh: tomorrowDayZh,
-    tomorrowSchedule: tomorrowSchedule,
-    tomorrowCalendar: tomorrowCalendar,
-    tomorrowUniform: tomorrowUniform,
-    proposal: reviewProposal
-  });
+    if (teacherId) {
+      saveSessionState(teacherId, 'EVENING_PENDING', {
+        todayStr: todayStr,
+        tomorrowStr: targetDateStr,
+        tomorrowDayZh: targetDayZh,
+        tomorrowSchedule: targetSchedule,
+        tomorrowCalendar: targetCalendar,
+        tomorrowUniform: targetUniform,
+        proposal: reviewProposal
+      });
+    }
 
-  const quickReplies = [
-    { label: '✅ 明日全選 A', text: '全選A' },
-    { label: '📘 明日全選 B', text: '全選B' },
-    { label: '⚡ 臨時改變進度', text: '臨時改變進度' },
-    { label: '🔄 重新設計進度', text: '重新設計進度' }
-  ];
+    const quickReplies = [
+      { label: '✅ 全選進度(全A)', text: '全選A' },
+      { label: '📘 全選補救(全B)', text: '全選B' },
+      { label: '⚡ 臨時改變進度', text: '臨時改變進度' },
+      { label: '🔄 重新設計進度', text: '重新設計進度' }
+    ];
 
-  const msgText = `🌙 【20:00 晚間復盤與明日行程建議】
-━━━━━━━━━━━━━━
-${reviewProposal}`;
+    const msgText = `🌙 【晚間復盤與下個教學日（${targetDateStr} 週${targetDayZh}）建議】\n━━━━━━━━━━━━━━\n${reviewProposal}`;
 
-  if (replyToken) {
-    replyTextMessageWithQuickReply(replyToken, msgText, quickReplies);
-  } else {
-    pushMessageWithQuickReply(teacherId, msgText, quickReplies);
+    if (replyToken) {
+      replyTextMessageWithQuickReply(replyToken, msgText, quickReplies);
+    } else if (teacherId) {
+      pushMessageWithQuickReply(teacherId, msgText, quickReplies);
+    }
+  } catch (err) {
+    console.error('復盤生成錯誤: ' + err.toString());
+    const fallbackMsg = `🌙 【晚間復盤】\n━━━━━━━━━━━━━━\n今日為週五，今日課堂已圓滿結束！\n明日行事提醒：${weekendEvents.length > 0 ? weekendEvents.join('、') : '週末放假好好休息！'}\n\n下一個教學日為 10/26（週一，穿著班服，半天課中午 12:00 放學）。\n若需調整課程，可隨時點選下方按鈕！`;
+    if (replyToken) {
+      replyTextMessageWithQuickReply(replyToken, fallbackMsg, [
+        { label: '⚡ 臨時改變進度', text: '臨時改變進度' },
+        { label: '🔄 重新設計進度', text: '重新設計進度' },
+        { label: '📊 個人儀表板', text: '個人儀表板' }
+      ]);
+    }
   }
 }
 
