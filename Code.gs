@@ -203,7 +203,7 @@ function handleIncomingMessage(event) {
     switch (text) {
       case '今日行程':
       case '今日課表':
-        replyTodaySchedule(replyToken);
+        replyTodaySchedule(replyToken, userId);
         break;
 
       case '下班復盤':
@@ -764,7 +764,8 @@ function saveIncidentRecord(record) {
 
 // ======================== 【課表與行事曆讀取工具】 ========================
 
-function replyTodaySchedule(replyToken) {
+function replyTodaySchedule(replyToken, userId) {
+  const teacherId = userId || CONFIG.TEACHER_USER_ID;
   const today = new Date();
   const dayZh = getDayOfWeekZh(today.getDay());
   const todayStr = Utilities.formatDate(today, 'GMT+8', 'yyyy-MM-dd');
@@ -774,25 +775,76 @@ function replyTodaySchedule(replyToken) {
   const plan = getSavedPlan(todayStr);
   const uniformNote = CONFIG.UNIFORMS[dayZh] || '便服';
 
-  let msg = `📅 【今日課程與行事（${CONFIG.CLASS_NAME}·週${dayZh}）】\n` +
-    `━━━━━━━━━━━━━━\n` +
-    `👗 學生服裝：${uniformNote}\n` +
-    `🏫 學校行事：${calendarEvents.length > 0 ? calendarEvents.join('、') : '今日無全校重大行事'}\n\n` +
-    `⏰ 各節課程安排：\n`;
+  // 1. 若今日已有確認鎖定之各節客製待辦（字數大於 50 字視為完整規劃）
+  if (plan && plan.length > 50 && !plan.includes('尚未產生')) {
+    const msg = `📅 【今日課程安排與各節建議（${CONFIG.CLASS_NAME}·週${dayZh}）】\n` +
+      `━━━━━━━━━━━━━━\n` +
+      `👗 學生服裝：${uniformNote}\n` +
+      `🏫 學校行事：${calendarEvents.length > 0 ? calendarEvents.join('、') : '今日常規教學，無重大集會'}\n\n` +
+      `📋 【已確認鎖定之各節次待辦】：\n${plan}\n\n` +
+      `💡 導師可隨時點選下方按鈕微調進度！`;
 
-  if (schedule && schedule.length > 0) {
-    schedule.forEach(s => {
-      msg += `▫️ ${s.period}：${s.subject}（${s.type}）\n`;
+    const quickReplies = [
+      { label: '⚡ 臨時改變進度', text: '臨時改變進度' },
+      { label: '🔄 重新設計進度', text: '重新設計進度' },
+      { label: '💡 備課錦囊', text: '快速備課' },
+      { label: '📊 個人儀表板', text: '個人儀表板' }
+    ];
+    replyTextMessageWithQuickReply(replyToken, msg, quickReplies);
+    return;
+  }
+
+  // 2. 若今日尚未產出各節三選一建議，立即由 Gemini 現場即時分析課表與教材基準，動態生成！
+  const prompt = `你是一名專屬支援【臺中市梧棲區中正國民小學 四年丙班 (304班)】的專業教務智慧助教。
+嚴格遵守【G4 Curriculum Review 全域三階漏斗審查】：
+- 教科書版本：南一數學 4上、翰林國語 4上、康軒社會 4上、校本彈性梧風啟航
+- 關鍵里程碑：11/05-11/06 第一次定期評量（期中考，倒數 13 天）
+- 在地情境：臺中港區、梧棲漁港、高美濕地、九降風海風文化
+
+${getCurriculumPromptContext()}
+
+今天是 ${todayStr} 星期${dayZh}。
+服裝規定：${uniformNote}
+今日課表節次：
+${JSON.stringify(schedule, null, 2)}
+今日學校重大行事：${calendarEvents.length > 0 ? calendarEvents.join('、') : '常規教學日'}
+
+【重要核心要求 - 每一節課皆提供三種具體建議方案】：
+不要只列出空課表！導師要的是【早自修至第七節的每一節課，皆給予 3 種具體可選的備選建議方案】，供導師直接點選組合或即時微調：
+- [A] 標準進度：南一數總複習精熟/翰林國未教單元概念講授/康軒社第二單元核心概念導讀。
+- [B] 習作補救：針對四年級典型迷思（除法估商補零/等腰三角形性質/字音字形雙向細目/住屋器物分類）補救演練。
+- [C] 在地探究：結合梧棲海線生活情境（臺中港、高美濕地、九降風、梧棲老街傳統建築）之生活化應用、小組討論或多元評量。
+（若為科任課，則提供三種帶隊、用具檢查與秩序叮嚀選項）
+
+請以極具結構感、清晰好讀的繁體中文條列呈現：
+☀️ 今日總覽：服裝提醒 + 放學時間 + 學校行事
+⏰ 各節次三選一提案：
+▫️ 早自修 (07:50-08:40)：[A]... | [B]... | [C]...
+▫️ 第一節 (08:45-09:25) [科目]：[A]... | [B]... | [C]...
+▫️ 第二節 (09:35-10:15) [科目]：[A]... | [B]... | [C]...
+...依今日所有節次依序列出...
+▫️ 午餐/放學：注意事項
+
+文末引導導師：「您可回傳『全選A』、『全選B』，或輸入微調（如『第1節B，其餘A』）。亦可點選『臨時改變進度』或『重新設計進度』！」`;
+
+  const proposalText = callGeminiText(prompt);
+
+  if (teacherId) {
+    saveSessionState(teacherId, 'MORNING_PENDING', {
+      date: todayStr,
+      dayZh: dayZh,
+      proposal: proposalText
     });
-  } else {
-    msg += `（尚未設定週${dayZh}課表）\n`;
   }
 
-  if (plan) {
-    msg += `\n📋 【客製化教學待辦】：\n${plan}`;
-  }
+  const quickReplies = [
+    { label: '✅ 全選進度(全A)', text: '全選A' },
+    { label: '📘 全選補救(全B)', text: '全選B' },
+    { label: '⚡ 臨時改變進度', text: '臨時改變進度' },
+    { label: '🔄 重新設計進度', text: '重新設計進度' }
+  ];
 
-  replyTextMessage(replyToken, msg);
+  replyTextMessageWithQuickReply(replyToken, proposalText, quickReplies);
 }
 
 function replyPreparationTips(replyToken) {
