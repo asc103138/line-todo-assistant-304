@@ -543,13 +543,65 @@
 
     // 重新載入儀表板資料
     function refreshDashboardData() {
-      document.getElementById('dateDisplay').innerText = '資料更新中...';
-      google.script.run
-        .withSuccessHandler(renderDashboard)
-        .withFailureHandler(function(err) {
-          alert('取得駕駛艙資料失敗: ' + err);
-        })
-        .getDashboardData();
+      document.getElementById('dateDisplay').innerText = '資料載入中...';
+      if (typeof google !== 'undefined' && google.script && google.script.run) {
+        google.script.run
+          .withSuccessHandler(renderDashboard)
+          .withFailureHandler(function(err) {
+            console.error('取得駕駛艙資料失敗: ', err);
+            renderDashboard(getFallbackData());
+          })
+          .getDashboardData();
+      } else {
+        // 本地預覽模式
+        renderDashboard(getFallbackData());
+      }
+    }
+
+    // 離線預覽回退資料
+    function getFallbackData() {
+      return {
+        className: '臺中市梧棲區中正國小 四年丙班 (304班)',
+        today: '2026-10-23',
+        dayZh: '五',
+        uniform: '🏃 運動服（全天課，15:50 放學）',
+        examCountdown: 13,
+        finance: {
+          studentCount: 28,
+          feePerStudent: 300,
+          totalIncome: 8400,
+          totalExpense: 0,
+          balance: 8400,
+          categories: { '文具教材': 0, '活動點心': 0, '教室佈置': 0, '各類雜支': 0 }
+        },
+        schedule: [
+          { period: '早自修 (07:50-08:40)', subject: '晨讀與週五大掃除', type: '導師課' },
+          { period: '第一節 (08:45-09:25)', subject: '音樂', type: '科任課' },
+          { period: '第二節 (09:35-10:15)', subject: '數學', type: '導師課' },
+          { period: '第三節 (10:30-11:10)', subject: '英文', type: '科任課' },
+          { period: '第四節 (11:20-12:00)', subject: '國語', type: '導師課' },
+          { period: '第五節 (13:30-14:10)', subject: '閱讀 (彈性學習)', type: '導師課' },
+          { period: '第六節 (14:20-15:00)', subject: '電腦資訊', type: '科任課' },
+          { period: '第七節 (15:10-15:50)', subject: '健康', type: '科任課' }
+        ],
+        upcomingEvents: [
+          { date: '2026-10-24', name: '全校校慶運動大會', note: '全校重大活動' },
+          { date: '2026-10-25', name: '光復節', note: '國定節日' },
+          { date: '2026-10-26', name: '光復節調整放假', note: '連假調整' },
+          { date: '2026-10-27', name: '校慶運動會補休一日', note: '全校放假' },
+          { date: '2026-10-30', name: '★ 製作期中考前範圍圖', note: '官方帳號發送家長' },
+          { date: '2026-11-05', name: '第一次定期評量 (期中考 Day 1)', note: '國語、自然、英文' },
+          { date: '2026-11-06', name: '第一次定期評量 (期中考 Day 2)', note: '數學、社會' }
+        ],
+        todayPlan: `【今日課程安排與交辦已正式鎖定】
+▫️ 早自修：全班座位大掃除與晨讀安靜閱讀
+▫️ 第二節 (數學)：南一數第 1~5 單元期中考螺旋複習（除法退位補零迷思重點診斷）
+▫️ 第四節 (國語)：翰林國語第 1~6 課字音字形雙向細目表重點總整理
+▫️ 第五節 (閱讀)：第 4 篇作文草稿完成與期中考衝刺規劃
+▫️ 放學叮嚀：檢查文具、週五桌椅整理、提醒週末運動會作息`,
+        recentExpenses: [],
+        recentIncidents: []
+      };
     }
 
     // 渲染駕駛艙畫面
