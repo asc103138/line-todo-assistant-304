@@ -10,6 +10,8 @@ timetable_ocr.txt
 timetable_gemini.txt
 timetable.png
 calendar.pdf
+richmenu_neon_raw.png
+richmenu_neon_safe.jpg
 
 # Secrets & Environment
 .env
