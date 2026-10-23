@@ -190,6 +190,7 @@ function handleIncomingMessage(event) {
     const commandList = [
       '今日行程', '今日課表',
       '下班復盤', '下班RDQ', '開始復盤', '晚間復盤',
+      '預先規劃下個上課日', '預先規劃', '預排行程', '預排進度',
       '晨間安排', '晨間建議',
       '臨時改變進度', '改進度', '調整進度', '臨時改課',
       '重新設計進度', '重新設計課程進度', '重排進度', '重新規劃進度',
@@ -234,6 +235,13 @@ function handleIncomingMessage(event) {
       case '開始復盤':
       case '晚間復盤':
         triggerEveningInteractiveReview(userId, replyToken);
+        break;
+
+      case '預先規劃下個上課日':
+      case '預先規劃':
+      case '預排行程':
+      case '預排進度':
+        triggerEveningInteractiveReview(userId, replyToken, true);
         break;
 
       case '晨間安排':
@@ -405,13 +413,15 @@ function sendMorningInteractiveBriefing() {
   }
 
   const today = new Date();
-  const dayOfWeek = today.getDay();
-  // 週末不上課
-  if (dayOfWeek === 0 || dayOfWeek === 6) {
-    console.info('週末不上課，跳過 06:30 晨間推播。');
+  const todayInfo = getDateHolidayInfo(today);
+
+  // 結合國定假日、週末與學校補休校驗：若非正式上課日則跳過推播
+  if (!todayInfo.isSchoolDay) {
+    console.info(`今日為放假日（${todayInfo.reason}），跳過 06:30 晨間課堂推播。`);
     return;
   }
 
+  const dayOfWeek = today.getDay();
   const todayStr = Utilities.formatDate(today, 'GMT+8', 'yyyy-MM-dd');
   const dayZh = getDayOfWeekZh(dayOfWeek);
   const schedule = getScheduleByDay(dayZh);
@@ -734,32 +744,48 @@ function getPeriodReviewCard(periodItem, index, total, targetDayZh, targetDateSt
 
 /**
  * 每日 20:00 晚間推播 / 下班復盤啟動：
- * 採用「一節一節來」交互式確認下一個教學日之安排
+ * 結合國定假日、週末與學校補休自動研判：
+ * - 若當天是放假日（週末/國定假日/補休日）：主動提醒放假好好休息，並引導預先規劃下個正式上課日
+ * - 若當天為正式上課日（或老師點選預先規劃）：自動計算下一個教學日（跳過假日與補休），啟動逐節確認
  */
-function triggerEveningInteractiveReview(targetUserId, replyToken) {
+function triggerEveningInteractiveReview(targetUserId, replyToken, isForceNext) {
   const teacherId = targetUserId || CONFIG.TEACHER_USER_ID;
   if (!teacherId && !replyToken) return;
 
   const today = new Date();
-  const dayOfWeek = today.getDay();
   const todayStr = Utilities.formatDate(today, 'GMT+8', 'yyyy-MM-dd');
+  const todayInfo = getDateHolidayInfo(today);
+  const nextSchoolDay = getNextSchoolDay(today);
 
-  // 決定目標上課日：週五/週末展望下週一；平日展望明日
-  let targetDate = new Date(today.getTime());
-  if (dayOfWeek === 5) { // 週五 ➔ 下週一
-    targetDate.setDate(targetDate.getDate() + 3);
-  } else if (dayOfWeek === 6) { // 週六 ➔ 下週一
-    targetDate.setDate(targetDate.getDate() + 2);
-  } else if (dayOfWeek === 0) { // 週日 ➔ 週一
-    targetDate.setDate(targetDate.getDate() + 1);
-  } else {
-    targetDate.setDate(targetDate.getDate() + 1);
+  // 【核心校驗】：如果今天是假日（週末、國定假日、補休日），且不是老師主動要求預先規劃
+  if (!todayInfo.isSchoolDay && !isForceNext) {
+    const holidayMsg = `☕ 【今日為放假日（${todayInfo.reason}）】\n` +
+      `━━━━━━━━━━━━━━\n` +
+      `今日全校放假，無課堂教學，不需進行今日課堂復盤，請老師好好休息充電！🏖️\n\n` +
+      `🎯 下一個正式教學上課日為：\n` +
+      `👉 【${nextSchoolDay.dateStr} 週${nextSchoolDay.dayZh}】（${CONFIG.UNIFORMS[nextSchoolDay.dayZh] || '便服'}）\n` +
+      `${nextSchoolDay.calendarEvents.length > 0 ? `🏫 行事：${nextSchoolDay.calendarEvents.join('、')}\n` : ''}\n` +
+      `💡 您若想提前為下一個教學日預作準備，可點選下方按鈕開始預先規劃各節待辦！`;
+
+    const holidayQuickReplies = [
+      { label: '🎯 預先規劃下個上課日', text: '預先規劃下個上課日' },
+      { label: '📊 個人儀表板', text: '個人儀表板' },
+      { label: '💡 備課錦囊', text: '快速備課' }
+    ];
+
+    if (replyToken) {
+      replyTextMessageWithQuickReply(replyToken, holidayMsg, holidayQuickReplies);
+    } else if (teacherId) {
+      pushMessageWithQuickReply(teacherId, holidayMsg, holidayQuickReplies);
+    }
+    return;
   }
 
-  const targetDateStr = Utilities.formatDate(targetDate, 'GMT+8', 'yyyy-MM-dd');
-  const targetDayZh = getDayOfWeekZh(targetDate.getDay());
+  // 決定目標教學日（已精準結合國定假日與補休校驗，自動跳過放假）
+  const targetDateStr = nextSchoolDay.dateStr;
+  const targetDayZh = nextSchoolDay.dayZh;
   let targetSchedule = getScheduleByDay(targetDayZh);
-  const targetCalendar = getCalendarEvents(targetDateStr);
+  const targetCalendar = nextSchoolDay.calendarEvents;
   const targetUniform = CONFIG.UNIFORMS[targetDayZh] || '便服';
 
   // 梧棲中正國小週一、週三為半天課（中午 12:00 放學，僅有 1~4 節）
@@ -785,9 +811,10 @@ function triggerEveningInteractiveReview(targetUserId, replyToken) {
     saveSessionState(teacherId, 'EVENING_STEP_BY_STEP', sessionData);
   }
 
-  // 起始引言
-  const introMsg = `🌙 【下班復盤啟動・一節一節確認安排】\n` +
+  // 起始引言（清楚標明已自動校驗國定假日與補休）
+  const introMsg = `🌙 【${isForceNext ? '預先規劃下個教學日' : '下班復盤啟動'}・一節一節確認安排】\n` +
     `🎯 規劃目標：${targetDateStr} 週${targetDayZh}（${targetUniform}）\n` +
+    `📌 提示：已自動結合國定假日與補休校驗，跳過非上課日。\n` +
     `共 ${targetSchedule.length} 節課，我們一節一節快速確認！\n` +
     `（提示：非國/數/社/綜合/電腦/梧風之科任課，將提供「導師空白時間待辦」；亦可隨時點「⚡全部照常」一鍵完成）\n\n`;
 
@@ -1093,6 +1120,28 @@ function replyTodaySchedule(replyToken, userId) {
   const today = new Date();
   const dayZh = getDayOfWeekZh(today.getDay());
   const todayStr = Utilities.formatDate(today, 'GMT+8', 'yyyy-MM-dd');
+  const todayInfo = getDateHolidayInfo(today);
+  const nextSchoolDay = getNextSchoolDay(today);
+
+  // 【國定假日/補休/週末放假防護】：若今日為非上課日
+  if (!todayInfo.isSchoolDay) {
+    const holidayMsg = `📅 【今日行事提醒（${todayStr} 週${dayZh}）】\n` +
+      `━━━━━━━━━━━━━━\n` +
+      `🏖️ 今日狀態：【放假日 / 無課堂】（${todayInfo.reason}）\n` +
+      `💡 今日全校無須到校上課，祝老師假期充實愉快！\n\n` +
+      `🎯 下一個正式上課日：\n` +
+      `👉 【${nextSchoolDay.dateStr} 週${nextSchoolDay.dayZh}】（${CONFIG.UNIFORMS[nextSchoolDay.dayZh] || '便服'}）\n` +
+      `${nextSchoolDay.calendarEvents.length > 0 ? `🏫 行事：${nextSchoolDay.calendarEvents.join('、')}\n` : ''}\n` +
+      `您可隨時點選下方按鈕，提前為下個教學日預作安排！`;
+
+    const quickReplies = [
+      { label: '🎯 預先規劃下個上課日', text: '預先規劃下個上課日' },
+      { label: '📊 個人儀表板', text: '個人儀表板' },
+      { label: '💡 備課錦囊', text: '快速備課' }
+    ];
+    replyTextMessageWithQuickReply(replyToken, holidayMsg, quickReplies);
+    return;
+  }
 
   const schedule = getScheduleByDay(dayZh);
   const calendarEvents = getCalendarEvents(todayStr);
@@ -1233,6 +1282,151 @@ function getScheduleByDay(dayZh) {
     }
   }
   return filtered;
+}
+
+// ======================== 【臺灣國定假日、補休與行事曆自動判定模組】 ========================
+
+/**
+ * 臺灣官方國定假日、連假與補假對照表（2026-2027 學年度）
+ */
+const TAIWAN_HOLIDAYS_MAP = {
+  // 2026 年國定假日、連假與補假
+  '2026-01-01': '元旦開國紀念日',
+  '2026-02-14': '春節連假放假',
+  '2026-02-15': '春節連假（小年夜）',
+  '2026-02-16': '春節連假（除夕）',
+  '2026-02-17': '春節連假（春節初一）',
+  '2026-02-18': '春節連假（春節初二）',
+  '2026-02-19': '春節連假（春節初三）',
+  '2026-02-20': '春節連假（春節補假）',
+  '2026-02-21': '春節連假',
+  '2026-02-22': '春節連假',
+  '2026-02-27': '228和平紀念日（補假一日）',
+  '2026-02-28': '228和平紀念日',
+  '2026-04-03': '兒童節（補假一日）',
+  '2026-04-04': '兒童節',
+  '2026-04-05': '清明節',
+  '2026-04-06': '清明節（補假一日）',
+  '2026-06-19': '端午節（放假一日）',
+  '2026-09-25': '中秋節（放假一日）',
+  '2026-10-09': '國慶日（補假一日）',
+  '2026-10-10': '國慶日',
+  '2027-01-01': '元旦開國紀念日（放假一日）'
+};
+
+const TAIWAN_MAKEUP_SCHOOL_DAYS = {
+  // 若有行政院公告之彈性放假週六補課日，可在此登記
+};
+
+/**
+ * 判斷指定日期是否為放假日（週末、國定假日、補休、校慶補假）或上課日
+ */
+function getDateHolidayInfo(dateObj) {
+  const dateStr = Utilities.formatDate(dateObj, 'GMT+8', 'yyyy-MM-dd');
+  const dayOfWeek = dateObj.getDay(); // 0: 週日, 6: 週六
+
+  // 1. 優先檢查試算表「學校行事曆」的動態標記
+  const calendarEvents = getCalendarEvents(dateStr);
+  if (calendarEvents && calendarEvents.length > 0) {
+    for (let i = 0; i < calendarEvents.length; i++) {
+      const ev = String(calendarEvents[i]);
+      // 若標記為補課、補行上課
+      if (ev.includes('補課') || ev.includes('補行上課') || ev.includes('補行上班') || ev.includes('補班')) {
+        return {
+          isHoliday: false,
+          isSchoolDay: true,
+          reason: `補行上課日（${ev}）`,
+          isMakeup: true,
+          events: calendarEvents
+        };
+      }
+      // 若標記為放假、補休、校慶補休、連假、停課
+      if (ev.includes('補休') || ev.includes('補假') || ev.includes('放假') || ev.includes('連假') || 
+          ev.includes('停課') || ev.includes('休假') || ev.includes('校慶補休') || ev.includes('運動會補休')) {
+        return {
+          isHoliday: true,
+          isSchoolDay: false,
+          reason: `學校行事放假/補休（${ev}）`,
+          isMakeup: false,
+          events: calendarEvents
+        };
+      }
+    }
+  }
+
+  // 2. 檢查內建補課日
+  if (TAIWAN_MAKEUP_SCHOOL_DAYS[dateStr]) {
+    return {
+      isHoliday: false,
+      isSchoolDay: true,
+      reason: `全校調整補課日（${TAIWAN_MAKEUP_SCHOOL_DAYS[dateStr]}）`,
+      isMakeup: true,
+      events: calendarEvents
+    };
+  }
+
+  // 3. 檢查國定假日與補假對照表
+  if (TAIWAN_HOLIDAYS_MAP[dateStr]) {
+    return {
+      isHoliday: true,
+      isSchoolDay: false,
+      reason: `國定假日/補假（${TAIWAN_HOLIDAYS_MAP[dateStr]}）`,
+      isMakeup: false,
+      events: calendarEvents
+    };
+  }
+
+  // 4. 常規週末檢查 (週六、週日)
+  if (dayOfWeek === 0 || dayOfWeek === 6) {
+    return {
+      isHoliday: true,
+      isSchoolDay: false,
+      reason: dayOfWeek === 0 ? '週日常規放假' : '週六常規放假',
+      isMakeup: false,
+      events: calendarEvents
+    };
+  }
+
+  // 5. 常規上課日 (週一 ~ 週五)
+  return {
+    isHoliday: false,
+    isSchoolDay: true,
+    reason: '常規教學上課日',
+    isMakeup: false,
+    events: calendarEvents
+  };
+}
+
+/**
+ * 自動搜尋計算「下一個正式教學上課日」
+ * 自動跳過週末、國定假日、補休日、校慶補假，直到找到第一個真正的上課日！
+ */
+function getNextSchoolDay(fromDateObj) {
+  let curr = new Date(fromDateObj.getTime());
+  for (let i = 1; i <= 30; i++) {
+    curr.setDate(curr.getDate() + 1);
+    const info = getDateHolidayInfo(curr);
+    if (info.isSchoolDay) {
+      const dateStr = Utilities.formatDate(curr, 'GMT+8', 'yyyy-MM-dd');
+      const dayZh = getDayOfWeekZh(curr.getDay());
+      return {
+        date: curr,
+        dateStr: dateStr,
+        dayZh: dayZh,
+        holidayInfo: info,
+        calendarEvents: getCalendarEvents(dateStr)
+      };
+    }
+  }
+  // 安全備援
+  const fallbackDate = new Date(fromDateObj.getTime() + 86400000);
+  return {
+    date: fallbackDate,
+    dateStr: Utilities.formatDate(fallbackDate, 'GMT+8', 'yyyy-MM-dd'),
+    dayZh: getDayOfWeekZh(fallbackDate.getDay()),
+    holidayInfo: { isHoliday: false, isSchoolDay: true, reason: '常規教學日' },
+    calendarEvents: []
+  };
 }
 
 function getCalendarEvents(dateStr) {
