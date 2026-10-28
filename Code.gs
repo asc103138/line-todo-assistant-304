@@ -587,27 +587,213 @@ ${finalPlan}
 function isHomeroomSubject(subject) {
   if (!subject) return false;
   const s = String(subject).trim();
-  const homeroomList = ['國', '數', '社', '綜合', '電腦', '資訊', '梧風', '晨讀', '早自修'];
+  const homeroomList = ['國', '數', '社', '綜合', '電腦', '資訊', '梧風', '晨讀', '早自修', '導師'];
   return homeroomList.some(h => s.includes(h));
 }
 
 /**
- * 依節次與科目生成單節復盤卡片
- * - 導師課（國數社綜合電腦梧風）：給出三種切合真實教材進度之教學建議
- * - 科任課（其他所有科目）：不給教學建議，轉為【導師空白時間・空堂備課待辦】
+ * 將中文節次字串或代號解析為課表 schedule 中的 index
  */
-function getPeriodReviewCard(periodItem, index, total, targetDayZh, targetDateStr) {
+function parsePeriodIndex(str, schedule) {
+  if (!str) return -1;
+  const s = String(str).trim();
+  if (s.includes('早') || s.includes('晨')) {
+    const idx = schedule.findIndex(item => item.period.includes('早自修') || item.period.includes('晨') || item.period.includes('早'));
+    return idx !== -1 ? idx : 0;
+  }
+  const numMap = {
+    '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7,
+    '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7
+  };
+  const match = s.match(/([一二三四五六七1-7])/);
+  if (match) {
+    const periodNum = numMap[match[1]];
+    const idx = schedule.findIndex(item => item.period.includes(`第${periodNum}節`) || item.period.includes(`${match[1]}`));
+    return idx !== -1 ? idx : periodNum;
+  }
+  return -1;
+}
+
+/**
+ * 跨節識別引擎：
+ * 自動識別導師輸入的跨節/多節安排（如「早自習到第二節需要運動會預演」、「第1-2節健檢」、「上午都在操場預演」）
+ * 回傳：{ isSpan: boolean, coveredIndices: number[], activityName: string, coveredPeriodsText: string }
+ */
+function analyzePeriodSpan(text, currentIndex, schedule) {
+  if (!text || typeof text !== 'string') return { isSpan: false };
+  const clean = text.trim();
+
+  // 1. 識別明確起迄節次：
+  // "早自習到第二節需要運動會預演"、"早自修至第2節操場彩排"、"第1節到第2節運動會預演"、"1-2節健檢"、"早自習和第一節拔河比賽"
+  const spanRangeRegex = /(?:從)?\s*(早自習|早自修|晨讀|晨會|第?[一二三四五六七1-7]節?)\s*(?:到|至|～|~|-|和|與|跟|及)\s*(?:第)?([一二三四五六七1-7]|早自習|早自修|晨讀|晨會)節?/i;
+  const rangeMatch = clean.match(spanRangeRegex);
+
+  if (rangeMatch) {
+    let startIdx = parsePeriodIndex(rangeMatch[1], schedule);
+    let endIdx = parsePeriodIndex(rangeMatch[2], schedule);
+
+    if (startIdx === -1) startIdx = currentIndex;
+    if (endIdx !== -1 && endIdx >= startIdx) {
+      const coveredIndices = [];
+      for (let i = startIdx; i <= Math.min(endIdx, schedule.length - 1); i++) {
+        coveredIndices.push(i);
+      }
+
+      let activity = clean.replace(rangeMatch[0], '').trim();
+      activity = activity.replace(/^(需要|進行|要|排|是|要進行|全部|都在|改為|改|安排|在操場|在禮堂)\s*/, '').trim();
+      if (!activity) activity = '跨節專案活動';
+
+      const coveredPeriodNames = coveredIndices.map(idx => schedule[idx].period);
+      return {
+        isSpan: true,
+        coveredIndices: coveredIndices,
+        activityName: activity,
+        coveredPeriodsText: coveredPeriodNames.join('、')
+      };
+    }
+  }
+
+  // 2. 連續節次詞：「連兩節」、「連續兩節」、「連2節」、「連三節」
+  const continuousMatch = clean.match(/(?:連|連續)\s*([兩二2三3四4])\s*節/);
+  if (continuousMatch) {
+    const countMap = { '兩': 2, '二': 2, '2': 2, '三': 3, '3': 3, '四': 4, '4': 4 };
+    const count = countMap[continuousMatch[1]] || 2;
+    const coveredIndices = [];
+    for (let i = currentIndex; i < Math.min(currentIndex + count, schedule.length); i++) {
+      coveredIndices.push(i);
+    }
+    if (coveredIndices.length > 1) {
+      let activity = clean.replace(continuousMatch[0], '').trim();
+      activity = activity.replace(/^(需要|進行|要|排|是|要進行|都在|安排)\s*/, '').trim();
+      if (!activity) activity = '連續課程活動';
+      const coveredPeriodNames = coveredIndices.map(idx => schedule[idx].period);
+      return {
+        isSpan: true,
+        coveredIndices: coveredIndices,
+        activityName: activity,
+        coveredPeriodsText: coveredPeriodNames.join('、')
+      };
+    }
+  }
+
+  // 3. 時段詞識別：「上午/早上/上半天」、「下午/下半天」
+  if (/^(上午|早上|上半天)/i.test(clean)) {
+    const coveredIndices = [];
+    for (let i = 0; i < Math.min(5, schedule.length); i++) {
+      if (i >= currentIndex) coveredIndices.push(i);
+    }
+    if (coveredIndices.length > 1) {
+      let activity = clean.replace(/^(上午|早上|上半天)\s*(都在|要進行|要|進行|是|全部|安排)?\s*/i, '').trim();
+      if (!activity) activity = '上午專案活動';
+      const coveredPeriodNames = coveredIndices.map(idx => schedule[idx].period);
+      return {
+        isSpan: true,
+        coveredIndices: coveredIndices,
+        activityName: activity,
+        coveredPeriodsText: coveredPeriodNames.join('、')
+      };
+    }
+  }
+
+  if (/^(下午|下半天)/i.test(clean)) {
+    const coveredIndices = [];
+    for (let i = 5; i < schedule.length; i++) {
+      if (i >= currentIndex) coveredIndices.push(i);
+    }
+    if (coveredIndices.length > 1) {
+      let activity = clean.replace(/^(下午|下半天)\s*(都在|要進行|要|進行|是|全部|安排)?\s*/i, '').trim();
+      if (!activity) activity = '下午專案活動';
+      const coveredPeriodNames = coveredIndices.map(idx => schedule[idx].period);
+      return {
+        isSpan: true,
+        coveredIndices: coveredIndices,
+        activityName: activity,
+        coveredPeriodsText: coveredPeriodNames.join('、')
+      };
+    }
+  }
+
+  return { isSpan: false };
+}
+
+/**
+ * 分析已確認排程脈絡（answersSoFar）：
+ * 提取戶外/預演、測驗、作文等特殊活動狀態，供後續節次生成具備連貫邏輯之教學或空堂待辦建議
+ */
+function analyzePreviousContext(answersSoFar) {
+  if (!answersSoFar || answersSoFar.length === 0) {
+    return {
+      hasOutdoor: false,
+      hasExam: false,
+      hasWriting: false,
+      lastAnswer: null,
+      contextNote: ''
+    };
+  }
+
+  const allChoices = answersSoFar.map(a => a.choice).join(' ');
+  const hasOutdoor = /(預演|彩排|運動會|操場|大隊接力|拔河|體育|戶外|健檢)/i.test(allChoices);
+  const hasExam = /(段考|月考|定期評量|試卷|雙向細目|考卷|小考|複習考)/i.test(allChoices);
+  const hasWriting = /(作文|寫作|稿紙|我最敬佩的人)/i.test(allChoices);
+
+  const lastAnswer = answersSoFar[answersSoFar.length - 1];
+  let contextNote = '';
+
+  if (lastAnswer) {
+    if (/(預演|彩排|運動會|操場|大隊接力|拔河)/i.test(lastAnswer.choice)) {
+      contextNote = `🏃 前一活動為【${lastAnswer.period} ${lastAnswer.choice}】，學生體力消耗大、易浮躁口渴`;
+    } else if (/(作文|寫作)/i.test(lastAnswer.choice)) {
+      contextNote = `✍️ 前一節已進行【${lastAnswer.period} 作文撰寫】`;
+    } else if (/(段考|試卷|考卷)/i.test(lastAnswer.choice)) {
+      contextNote = `📝 前一節已進行【${lastAnswer.period} 測驗評量】`;
+    }
+  }
+
+  return {
+    hasOutdoor,
+    hasExam,
+    hasWriting,
+    lastAnswer,
+    contextNote
+  };
+}
+
+/**
+ * 依節次與科目生成單節復盤卡片（具備前後連貫邏輯脈絡感知）
+ * - 導師課（國數社綜合電腦梧風）：給出三種切合真實教材進度之教學建議，並融入前後節次調適
+ * - 科任課（其他所有科目）：不給教學建議，轉為【導師空白時間・空堂備課待辦】，依前段活動連貫推薦
+ */
+function getPeriodReviewCard(periodItem, index, total, targetDayZh, targetDateStr, answersSoFar) {
   const periodName = periodItem.period || `第${index + 1}節`;
   const subject = periodItem.subject || '課程';
   const isHomeroom = isHomeroomSubject(subject);
+  const prevCtx = analyzePreviousContext(answersSoFar || []);
 
   if (!isHomeroom) {
     // 【科任課・導師空白時間】
     const title = `☕ 【第 ${index + 1}/${total} 節：${periodName} - ${subject}（科任課・導師空白時間）】`;
-    const desc = `🔔 此節為科任課，導師享有 40 分鐘空堂備課時間！\n建議可利用此段空白時間處理以下班務待辦：\n\n` +
-      `[A] 批閱作業：批改今日數習、生字簿或隨堂演練，標記學生錯題\n` +
-      `[B] 班務親師：整理班費發票收據自動記帳、聯繫個別學生家長\n` +
-      `[C] 備課印卷：準備下一節教材教具、列印期中考雙向細目複習卷\n\n` +
+    let desc = `🔔 此節為科任課，導師享有 40 分鐘空堂備課時間！\n`;
+    if (prevCtx.contextNote) {
+      desc += `📌 連貫情境：${prevCtx.contextNote}。\n`;
+    }
+    desc += `建議可利用此段空白時間處理以下班務待辦：\n\n`;
+
+    let optA = '批閱作業：批改今日數習、生字簿或隨堂演練，標記學生錯題';
+    let optB = '班務親師：整理班費發票收據自動記帳、聯繫個別學生家長';
+    let optC = '備課印卷：準備下一節教材教具、列印期中考雙向細目複習卷';
+
+    // 依前節脈絡動態調適
+    if (prevCtx.hasOutdoor) {
+      optB = '身心關懷：督導剛從操場/預演回班學生充分補充水分、調息靜心，整理班務單據';
+    } else if (prevCtx.hasWriting) {
+      optA = '批閱作文：初閱學生剛完成之「我最敬佩的人」作文首稿，標註佳作與錯字';
+    } else if (prevCtx.hasExam) {
+      optA = '批閱試卷：批改剛完成之雙向細目卷/隨堂測驗，即時統計錯題分布';
+    }
+
+    desc += `[A] ${optA}\n` +
+      `[B] ${optB}\n` +
+      `[C] ${optC}\n\n` +
       `👉 請點選建議，或直接輸入自訂待辦事項：`;
 
     return {
@@ -617,9 +803,9 @@ function getPeriodReviewCard(periodItem, index, total, targetDayZh, targetDateSt
       title: title,
       fullText: `${title}\n━━━━━━━━━━━━━━\n${desc}`,
       options: {
-        'A': '批閱作業（數習、生字簿、隨堂演練批改與錯題標記）',
-        'B': '班務親師（整理班費單據記帳、聯繫個別家長）',
-        'C': '備課印卷（教材教具準備、列印期中考雙向細目複習卷）'
+        'A': optA,
+        'B': optB,
+        'C': optC
       },
       quickReplies: [
         { label: '✏️ A 批改作業', text: 'A 批改作業' },
@@ -636,6 +822,8 @@ function getPeriodReviewCard(periodItem, index, total, targetDayZh, targetDateSt
   let desc = '';
   let options = {};
   let quickReplies = [];
+
+  const contextPrefix = prevCtx.contextNote ? `📌 前後連貫情境：${prevCtx.contextNote}（建議本節先引導飲水靜心再展開教學）。\n\n` : '';
 
   const s = String(subject).trim();
   if (s.includes('早自修') || s.includes('晨讀')) {
@@ -659,7 +847,8 @@ function getPeriodReviewCard(periodItem, index, total, targetDayZh, targetDateSt
     ];
   } else if (s.includes('國')) {
     title = `📘 【第 ${index + 1}/${total} 節：${periodName} - 國語（導師授課）】`;
-    desc = `當前進度：第6課未教第四段、統整一二未教、尚缺一篇作文。\n建議教學方案：\n\n` +
+    desc = contextPrefix +
+      `當前進度：第6課未教第四段、統整一二未教、尚缺一篇作文。\n建議教學方案：\n\n` +
       `[A] 標準進度：精讀第6課《又遠又近的月亮》第四段科技省思與句型「就算…也…」\n` +
       `[B] 統整活動：拆解統整（一）讀信格式與朗讀節奏 / 統整（二）讀報五要素\n` +
       `[C] 作文引導：搭配統整活動二「我最敬佩的人/家鄉一景」審題立意，補足期中作文\n\n` +
@@ -678,13 +867,17 @@ function getPeriodReviewCard(periodItem, index, total, targetDayZh, targetDateSt
     ];
   } else if (s.includes('數')) {
     title = `📘 【第 ${index + 1}/${total} 節：${periodName} - 數學（導師授課）】`;
-    desc = `當前進度：期中考範圍（單元一～五）已全數教完，進行螺旋總複習。\n建議教學方案：\n\n` +
-      `[A] 總複習精熟：除法二位數除以二位數/三位數除以二位數之試商精練\n` +
+    const mathFocusA = prevCtx.hasOutdoor ?
+      '靜心總複習：除法二位數除以二位數/三位數除以二位數之試商精熟（平穩沉澱）' :
+      '除法二位數除以二位數/三位數除以二位數之試商精練與總複習';
+    desc = contextPrefix +
+      `當前進度：期中考範圍（單元一～五）已全數教完，進行螺旋總複習。\n建議教學方案：\n\n` +
+      `[A] 總複習精熟：${mathFocusA}\n` +
       `[B] 迷思補救：除法估商補零退位診斷、三角形等腰與角度量測性質補救\n` +
       `[C] 生活素養題：結合臺中港貨櫃裝載、拍賣數量之大數乘除混合應用\n\n` +
       `👉 請點選建議，或直接輸入自訂進度：`;
     options = {
-      'A': '除法二位數除以二位數/三位數除以二位數之試商精練與總複習',
+      'A': mathFocusA,
       'B': '除法估商補零退位診斷、三角形等腰與角度量測性質易錯題補救',
       'C': '結合臺中港貨櫃裝載、漁獲拍賣之大數乘除生活素養題探究'
     };
@@ -697,7 +890,8 @@ function getPeriodReviewCard(periodItem, index, total, targetDayZh, targetDateSt
     ];
   } else if (s.includes('社')) {
     title = `📗 【第 ${index + 1}/${total} 節：${periodName} - 社會（導師授課）】`;
-    desc = `當前進度：第一單元已教完，未教第二單元《家鄉的傳統住屋與器物》。\n建議教學方案：\n\n` +
+    desc = contextPrefix +
+      `當前進度：第一單元已教完，未教第二單元《家鄉的傳統住屋與器物》。\n建議教學方案：\n\n` +
       `[A] 2-1 傳統住屋：導讀三合院、土埆厝、石板屋與就地取材之環境智慧\n` +
       `[B] 2-2 生活器物：傳統器物與生活演變（竹編魚筌捕魚、陶甕石磨、火籠）\n` +
       `[C] 梧棲老街探究：連結梧棲老街傳統街屋建築與早期海線常民器物\n\n` +
@@ -716,7 +910,8 @@ function getPeriodReviewCard(periodItem, index, total, targetDayZh, targetDateSt
     ];
   } else if (s.includes('綜合')) {
     title = `💻 【第 ${index + 1}/${total} 節：${periodName} - 綜合活動（導師授課）】`;
-    desc = `建議教學方案：\n\n` +
+    desc = contextPrefix +
+      `建議教學方案：\n\n` +
       `[A] 標準進度：生活自主與班級自治主題探究實作\n` +
       `[B] 期中作文補足：引導「我最敬佩的人」作文首稿撰寫\n` +
       `[C] 梧風海線主題：探究海線高美濕地生態保育與永續生活\n\n` +
@@ -735,7 +930,8 @@ function getPeriodReviewCard(periodItem, index, total, targetDayZh, targetDateSt
     ];
   } else if (s.includes('電腦') || s.includes('資訊')) {
     title = `💻 【第 ${index + 1}/${total} 節：${periodName} - 電腦資訊（導師授課）】`;
-    desc = `建議教學方案：\n\n` +
+    desc = contextPrefix +
+      `建議教學方案：\n\n` +
       `[A] 數位素養：資訊倫理、中打練習與簡報製作基礎\n` +
       `[B] 跨域應用：使用平板進行國語阿提米絲月球新聞資料檢索\n` +
       `[C] 數位評量：PaGamO 數學期中考除法與角度複習任務\n\n` +
@@ -754,7 +950,8 @@ function getPeriodReviewCard(periodItem, index, total, targetDayZh, targetDateSt
     ];
   } else if (s.includes('梧風') || s.includes('校本') || s.includes('彈性')) {
     title = `🌊 【第 ${index + 1}/${total} 節：${periodName} - 梧風啟航（導師授課）】`;
-    desc = `校本彈性課程建議方案：\n\n` +
+    desc = contextPrefix +
+      `校本彈性課程建議方案：\n\n` +
       `[A] 梧風起航：臺中港區現代物流與國際海港發展史\n` +
       `[B] 九降風探究：認識海線九降風特色與傳統曬魚、防風智慧\n` +
       `[C] 高美濕地：濕地動植物生態與海堤風車地景探究\n\n` +
@@ -772,7 +969,8 @@ function getPeriodReviewCard(periodItem, index, total, targetDayZh, targetDateSt
       { label: '⚡ 全部照常', text: '全部照常' }
     ];
   } else {
-    desc = `建議教學方案：\n\n` +
+    desc = contextPrefix +
+      `建議教學方案：\n\n` +
       `[A] 標準教學進度循序推動\n` +
       `[B] 習作與課堂練習精練補救\n` +
       `[C] 生活化應用與小組互動發表\n\n` +
@@ -801,6 +999,7 @@ function getPeriodReviewCard(periodItem, index, total, targetDayZh, targetDateSt
     quickReplies: quickReplies
   };
 }
+
 
 /**
  * 每日 20:00 晚間推播 / 下班復盤啟動：
@@ -885,12 +1084,12 @@ function triggerEveningInteractiveReview(targetUserId, replyToken, isForceNext) 
 }
 
 /**
- * 發送單一節次之復盤詢問卡片
+ * 發送單一節次之復盤詢問卡片（傳入 sessionData.answers 達成連貫脈絡感知）
  */
 function sendReviewStepQuestion(userId, replyToken, sessionData, prefixMsg) {
   const index = sessionData.currentIndex;
   const currentPeriod = sessionData.schedule[index];
-  const card = getPeriodReviewCard(currentPeriod, index, sessionData.schedule.length, sessionData.targetDayZh, sessionData.targetDateStr);
+  const card = getPeriodReviewCard(currentPeriod, index, sessionData.schedule.length, sessionData.targetDayZh, sessionData.targetDateStr, sessionData.answers || []);
 
   const fullText = (prefixMsg ? prefixMsg : '') + card.fullText;
 
@@ -903,6 +1102,9 @@ function sendReviewStepQuestion(userId, replyToken, sessionData, prefixMsg) {
 
 /**
  * 處理導師「一節一節來」的回覆
+ * 支援：
+ * 1. 跨節/多節覆蓋識別（如「早自習到第二節需要運動會預演」，自動覆蓋所跨節次並跳過詢問）
+ * 2. 脈絡連貫生成（傳入已確認清單 answers，讓後續空堂待辦與教學具備因果承接邏輯）
  */
 function handleStepByStepReviewReply(userId, text, replyToken) {
   const session = getSessionState(userId);
@@ -927,7 +1129,7 @@ function handleStepByStepReviewReply(userId, text, replyToken) {
   if (cleanText.includes('全部照常') || cleanText === '全選A' || cleanText === '全部A') {
     for (let i = index; i < schedule.length; i++) {
       const p = schedule[i];
-      const card = getPeriodReviewCard(p, i, schedule.length, data.targetDayZh, data.targetDateStr);
+      const card = getPeriodReviewCard(p, i, schedule.length, data.targetDayZh, data.targetDateStr, answers);
       answers.push({
         period: p.period,
         subject: p.subject,
@@ -941,9 +1143,38 @@ function handleStepByStepReviewReply(userId, text, replyToken) {
     return;
   }
 
-  // 處理當前節次之選擇
+  // 跨節識別：若導師輸入跨節安排（如「早自習到第二節需要運動會預演」或「上午連兩節作文」）
+  const spanResult = analyzePeriodSpan(cleanText, index, schedule);
+  if (spanResult && spanResult.isSpan && spanResult.coveredIndices && spanResult.coveredIndices.length > 0) {
+    spanResult.coveredIndices.forEach((pIdx) => {
+      const p = schedule[pIdx];
+      const isHm = isHomeroomSubject(p.subject);
+      answers.push({
+        period: p.period,
+        subject: p.subject,
+        isHomeroom: isHm,
+        choice: spanResult.activityName
+      });
+    });
+
+    const maxCoveredIdx = Math.max(...spanResult.coveredIndices);
+    index = maxCoveredIdx + 1;
+    data.currentIndex = index;
+    data.answers = answers;
+
+    if (index < schedule.length) {
+      saveSessionState(userId, 'EVENING_STEP_BY_STEP', data);
+      const confirmPrefix = `✅ 已為您將【${spanResult.coveredPeriodsText}】連貫排定為：\n👉 ${spanResult.activityName}\n━━━━━━━━━━━━━━\n\n`;
+      sendReviewStepQuestion(userId, replyToken, data, confirmPrefix);
+    } else {
+      finishEveningStepReview(userId, data, replyToken);
+    }
+    return;
+  }
+
+  // 處理單節次之選擇或自訂
   const currentP = schedule[index];
-  const card = getPeriodReviewCard(currentP, index, schedule.length, data.targetDayZh, data.targetDateStr);
+  const card = getPeriodReviewCard(currentP, index, schedule.length, data.targetDayZh, data.targetDateStr, answers);
   let chosenText = '';
 
   if (cleanText.startsWith('A') || cleanText.includes('[A') || cleanText.includes('A ')) {
@@ -955,7 +1186,7 @@ function handleStepByStepReviewReply(userId, text, replyToken) {
   } else if (cleanText.includes('下一節') || cleanText.includes('跳過')) {
     chosenText = card.options['A'] || '照常規推進';
   } else {
-    // 導師自訂具體文字（例如：「這節改上數學」、「這節看防災影片」）
+    // 導師單節自訂具體文字（例如：「這節改看防災宣導影片」）
     chosenText = cleanText;
   }
 
