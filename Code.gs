@@ -108,6 +108,57 @@ const CONFIG = {
   }
 };
 
+/**
+ * 安全日期格式化工具：防止 null、undefined、空字串或無效日期導致 Utilities.formatDate 拋出異常中斷
+ */
+function safeFormatDate(val, format) {
+  if (val === null || val === undefined || val === '') return '';
+  try {
+    const d = (val instanceof Date) ? val : new Date(val);
+    if (isNaN(d.getTime())) return '';
+    return Utilities.formatDate(d, 'GMT+8', format || 'yyyy-MM-dd');
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
+ * 取得導師 LINE User ID（具備三重容錯與自動修復）
+ * 1. 優先從 ScriptProperties 讀取
+ * 2. 次從 CONFIG 快取讀取
+ * 3. 自 RDQ_STATE 工作表自動恢復過往互動記錄之 User ID
+ */
+function getTeacherUserId() {
+  let id = SCRIPT_PROPERTIES.getProperty('TEACHER_USER_ID');
+  if (id && String(id).trim().startsWith('U')) return String(id).trim();
+
+  if (CONFIG.TEACHER_USER_ID && String(CONFIG.TEACHER_USER_ID).trim().startsWith('U')) {
+    return String(CONFIG.TEACHER_USER_ID).trim();
+  }
+
+  // 自動自 RDQ_STATE 試算表恢復導師 ID
+  try {
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName(CONFIG.SHEETS.RDQ_STATE);
+    if (sheet && sheet.getLastRow() > 1) {
+      const data = sheet.getDataRange().getValues();
+      for (let i = data.length - 1; i >= 1; i--) {
+        const val = String(data[i][0] || '').trim();
+        if (val.startsWith('U') && val.length > 20) {
+          SCRIPT_PROPERTIES.setProperty('TEACHER_USER_ID', val);
+          CONFIG.TEACHER_USER_ID = val;
+          console.log('✅ 自動自 RDQ_STATE 恢復並綁定導師 User ID: ' + val);
+          return val;
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('嘗試自 RDQ_STATE 恢復 User ID 失敗: ' + e);
+  }
+
+  return '';
+}
+
 // ======================== 【Web App 入口：doGet & doPost】 ========================
 
 /**
@@ -150,8 +201,8 @@ function doPost(e) {
       const event = events[i];
       const userId = event.source ? event.source.userId : null;
 
-      // 自動記錄或更新導師的 User ID
-      if (userId && (!CONFIG.TEACHER_USER_ID || CONFIG.TEACHER_USER_ID !== userId)) {
+      // 自動記錄或更新導師的 User ID（只要是以 U 開頭的標準 LINE User ID）
+      if (userId && String(userId).startsWith('U')) {
         SCRIPT_PROPERTIES.setProperty('TEACHER_USER_ID', userId);
         CONFIG.TEACHER_USER_ID = userId;
       }
@@ -192,6 +243,7 @@ function handleIncomingMessage(event) {
       '下班復盤', '下班RDQ', '開始復盤', '晚間復盤',
       '預先規劃下個上課日', '預先規劃', '預排行程', '預排進度',
       '晨間安排', '晨間建議',
+      '綁定推播', '設定推播', '測試推播', '檢查推播', '重設觸發條件',
       '臨時改變進度', '改進度', '調整進度', '臨時改課',
       '重新設計進度', '重新設計課程進度', '重排進度', '重新規劃進度',
       '班費收支', '班費結餘',
@@ -247,6 +299,14 @@ function handleIncomingMessage(event) {
       case '晨間安排':
       case '晨間建議':
         sendMorningInteractiveBriefing();
+        break;
+
+      case '綁定推播':
+      case '設定推播':
+      case '測試推播':
+      case '檢查推播':
+      case '重設觸發條件':
+        handleTriggerSetupCommand(userId, replyToken);
         break;
 
       case '臨時改變進度':
@@ -406,9 +466,9 @@ function getCurriculumPromptContext() {
  * 每日 06:30 晨間推播：結合今日課表、行事曆與昨夜復盤，主動提出 3 個安排方案供導師點選與確認臨時交辦
  */
 function sendMorningInteractiveBriefing() {
-  const teacherId = CONFIG.TEACHER_USER_ID;
+  const teacherId = getTeacherUserId();
   if (!teacherId) {
-    console.warn('尚未記錄導師 User ID，無法發送 06:30 晨間推播。');
+    console.warn('尚未記錄導師 User ID，無法發送 06:30 晨間推播。請在 LINE 輸入「綁定推播」或在 GAS 執行 setupDailyTriggers。');
     return;
   }
 
@@ -749,8 +809,11 @@ function getPeriodReviewCard(periodItem, index, total, targetDayZh, targetDateSt
  * - 若當天為正式上課日（或老師點選預先規劃）：自動計算下一個教學日（跳過假日與補休），啟動逐節確認
  */
 function triggerEveningInteractiveReview(targetUserId, replyToken, isForceNext) {
-  const teacherId = targetUserId || CONFIG.TEACHER_USER_ID;
-  if (!teacherId && !replyToken) return;
+  const teacherId = targetUserId || getTeacherUserId();
+  if (!teacherId && !replyToken) {
+    console.warn('尚未記錄導師 User ID 且無 replyToken，無法執行晚間復盤推播。請在 LINE 輸入「綁定推播」或在 GAS 執行 setupDailyTriggers。');
+    return;
+  }
 
   const today = new Date();
   const todayStr = Utilities.formatDate(today, 'GMT+8', 'yyyy-MM-dd');
@@ -973,13 +1036,111 @@ function handleEveningConfirmation(userId, text, replyToken) {
   replyTextMessage(replyToken, '收到！已為您更新。隨時點選「下班復盤」即可啟動新版逐節復盤！');
 }
 
-// 相容舊函式
+// ======================== 【定時排程推播與觸發條件管理】 ========================
+
+/**
+ * 06:30 晨間安排定時進入點（相容舊名與 Trigger 入口）
+ */
 function sendMorningBriefing() {
-  sendMorningInteractiveBriefing();
+  try {
+    sendMorningInteractiveBriefing();
+  } catch (err) {
+    console.error('sendMorningBriefing 執行異常: ' + (err.stack || err.toString()));
+  }
 }
 
+/**
+ * 20:00 晚間復盤定時進入點（相容舊名與 Trigger 入口）
+ */
 function triggerEveningRDQ() {
-  triggerEveningInteractiveReview();
+  try {
+    triggerEveningInteractiveReview();
+  } catch (err) {
+    console.error('triggerEveningRDQ 執行異常: ' + (err.stack || err.toString()));
+  }
+}
+
+/**
+ * 一鍵設定/重設所有每日自動定時推播觸發條件
+ * 可在 GAS 編輯器直接選擇本函式點「執行」，或在 LINE 輸入「設定推播」
+ */
+function setupDailyTriggers() {
+  // 1. 清除舊有或重複的推播觸發條件
+  const triggers = ScriptApp.getProjectTriggers();
+  for (let i = 0; i < triggers.length; i++) {
+    const fn = triggers[i].getHandlerFunction();
+    if (fn === 'sendMorningBriefing' || fn === 'sendMorningInteractiveBriefing' || 
+        fn === 'triggerEveningRDQ' || fn === 'triggerEveningInteractiveReview') {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+
+  // 2. 建立晨間 06:00 - 07:00 觸發器（日計時器）
+  ScriptApp.newTrigger('sendMorningBriefing')
+    .timeBased()
+    .everyDays(1)
+    .atHour(6)
+    .create();
+
+  // 3. 建立晚間 20:00 - 21:00 觸發器（日計時器）
+  ScriptApp.newTrigger('triggerEveningRDQ')
+    .timeBased()
+    .everyDays(1)
+    .atHour(20)
+    .create();
+
+  console.log('✅ 每日定時觸發條件已成功建立（06:00-07:00 晨間安排、20:00-21:00 晚間復盤）！');
+
+  const teacherId = getTeacherUserId();
+  if (teacherId) {
+    pushMessage(teacherId, '🔔 【定時推播觸發條件已成功重新設定與校準】\n━━━━━━━━━━━━━━\n系統已正式啟動每日自動排程：\n☀️ 06:30 晨間課堂建議與臨時交辦確認\n🌙 20:00 晚間逐節復盤與明日待辦規劃\n\n📌 綁定導師：已成功鎖定您的 LINE 帳號！');
+    return `✅ 觸發條件已成功建立，並已向導師 (${teacherId}) 發送確認通知！`;
+  } else {
+    return '✅ 觸發條件已成功建立！請在 LINE 官方帳號輸入「綁定推播」以完成導師帳號鎖定。';
+  }
+}
+
+/**
+ * 測試定時推播連線能力（可在 GAS 編輯器直接點選執行測試）
+ */
+function testScheduledPush() {
+  const teacherId = getTeacherUserId();
+  if (!teacherId) {
+    throw new Error('❌ 未找到導師 User ID！請先在 LINE 官方帳號傳送「綁定推播」，系統即可自動捕捉並鎖定您的 ID。');
+  }
+
+  pushMessage(teacherId, `🧪 【定時推播連線測試】\n━━━━━━━━━━━━━━\n現在時間：${Utilities.formatDate(new Date(), 'GMT+8', 'yyyy-MM-dd HH:mm:ss')}\n導師 ID：${teacherId}\n\nLINE Messaging API 連線完全正常！系統將於每日 06:30 與 20:00 自動向您發送詢問卡片。`);
+  return '測試推播已發送！請檢查 LINE 官方帳號。';
+}
+
+/**
+ * 處理 LINE 文字指令「綁定推播 / 設定推播 / 測試推播」
+ */
+function handleTriggerSetupCommand(userId, replyToken) {
+  if (userId && String(userId).startsWith('U')) {
+    SCRIPT_PROPERTIES.setProperty('TEACHER_USER_ID', userId);
+    CONFIG.TEACHER_USER_ID = userId;
+  }
+
+  let triggerStatus = '';
+  try {
+    setupDailyTriggers();
+    triggerStatus = '✅ 每日定時觸發條件已由程式自動建置完成！';
+  } catch (err) {
+    triggerStatus = '⚠️ 觸發條件建立提示：' + err.message + '\n（亦可在 Apps Script 編輯器上方選擇 setupDailyTriggers 點擊執行一鍵啟動）';
+  }
+
+  const replyMsg = `🔔 【導師推播設定與帳號綁定成功】\n` +
+    `━━━━━━━━━━━━━━\n` +
+    `▫️ 導師 LINE ID：${userId || '已成功鎖定'}\n` +
+    `▫️ 排程狀態：${triggerStatus}\n\n` +
+    `⏰ 【每日定時推播時段】：\n` +
+    `☀️ 06:30 晨間課堂建議與臨時交辦確認\n` +
+    `🌙 20:00 晚間逐節復盤與明日待辦規劃\n` +
+    `━━━━━━━━━━━━━━\n` +
+    `💡 系統將於指定時段主動向您發送詢問卡片！`;
+
+  replyTextMessage(replyToken, replyMsg);
 }
 
 // ======================== 【突發事件與自然語言處理】 ========================
@@ -1068,8 +1229,8 @@ function replyClassFeeSummary(replyToken) {
     });
 
     // 取最新 3 筆
-    const recents = data.slice(-3).reverse();
-    recentExpenses = recents.map(r => `▫️ ${Utilities.formatDate(new Date(r[0]), 'GMT+8', 'MM/dd')} ${r[1]}：$${Number(r[4]).toLocaleString()} (${r[2]})`);
+    const recents = data.filter(r => r && r[0]).slice(-3).reverse();
+    recentExpenses = recents.map(r => `▫️ ${safeFormatDate(r[0], 'MM/dd') || String(r[0])} ${r[1]}：$${Number(r[4] || 0).toLocaleString()} (${r[2]})`);
   }
 
   const balance = totalIncome - totalExpense;
@@ -1116,7 +1277,7 @@ function saveIncidentRecord(record) {
 // ======================== 【課表與行事曆讀取工具】 ========================
 
 function replyTodaySchedule(replyToken, userId) {
-  const teacherId = userId || CONFIG.TEACHER_USER_ID;
+  const teacherId = userId || getTeacherUserId();
   const today = new Date();
   const dayZh = getDayOfWeekZh(today.getDay());
   const todayStr = Utilities.formatDate(today, 'GMT+8', 'yyyy-MM-dd');
@@ -1438,9 +1599,10 @@ function getCalendarEvents(dateStr) {
   const events = [];
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
-    const rowDateStr = Utilities.formatDate(new Date(row[0]), 'GMT+8', 'yyyy-MM-dd');
-    if (rowDateStr === dateStr) {
-      events.push(row[1] + (row[2] ? ` (${row[2]})` : ''));
+    if (!row || !row[0]) continue;
+    const rowDateStr = safeFormatDate(row[0], 'yyyy-MM-dd');
+    if (rowDateStr && rowDateStr === dateStr) {
+      events.push(String(row[1] || '活動') + (row[2] ? ` (${row[2]})` : ''));
     }
   }
   return events;
@@ -1459,8 +1621,9 @@ function getSavedPlan(dateStr) {
 
   const data = sheet.getDataRange().getValues();
   for (let i = data.length - 1; i >= 1; i--) {
-    const rowDateStr = Utilities.formatDate(new Date(data[i][0]), 'GMT+8', 'yyyy-MM-dd');
-    if (rowDateStr === dateStr) {
+    if (!data[i] || !data[i][0]) continue;
+    const rowDateStr = safeFormatDate(data[i][0], 'yyyy-MM-dd');
+    if (rowDateStr && rowDateStr === dateStr) {
       return data[i][2];
     }
   }
@@ -1486,34 +1649,38 @@ function getDashboardData() {
   const expSheet = ss.getSheetByName(CONFIG.SHEETS.EXPENSES);
   if (expSheet && expSheet.getLastRow() > 1) {
     const data = expSheet.getRange(2, 1, expSheet.getLastRow() - 1, 6).getValues();
-    expenses = data.map(r => {
-      const amt = Number(r[4]) || 0;
-      totalExpense += amt;
-      const cat = r[2] || '各類雜支';
-      if (!categoryMap[cat]) categoryMap[cat] = 0;
-      categoryMap[cat] += amt;
-      return {
-        date: Utilities.formatDate(new Date(r[0]), 'GMT+8', 'yyyy-MM-dd'),
-        item: r[1],
-        category: cat,
-        vendor: r[3],
-        amount: amt,
-        note: r[5]
-      };
-    }).reverse();
+    expenses = data
+      .filter(r => r && r[0])
+      .map(r => {
+        const amt = Number(r[4]) || 0;
+        totalExpense += amt;
+        const cat = r[2] || '各類雜支';
+        if (!categoryMap[cat]) categoryMap[cat] = 0;
+        categoryMap[cat] += amt;
+        return {
+          date: safeFormatDate(r[0], 'yyyy-MM-dd') || String(r[0]),
+          item: r[1],
+          category: cat,
+          vendor: r[3],
+          amount: amt,
+          note: r[5]
+        };
+      }).reverse();
   }
 
   // 2. 突發事件
   const incSheet = ss.getSheetByName(CONFIG.SHEETS.INCIDENTS);
   if (incSheet && incSheet.getLastRow() > 1) {
     const data = incSheet.getRange(2, 1, incSheet.getLastRow() - 1, 6).getValues();
-    incidents = data.map(r => ({
-      time: Utilities.formatDate(new Date(r[0]), 'GMT+8', 'MM-dd HH:mm'),
-      student: r[1],
-      type: r[2],
-      description: r[3],
-      status: r[4]
-    })).reverse();
+    incidents = data
+      .filter(r => r && r[0])
+      .map(r => ({
+        time: safeFormatDate(r[0], 'MM-dd HH:mm') || String(r[0]),
+        student: r[1],
+        type: r[2],
+        description: r[3],
+        status: r[4]
+      })).reverse();
   }
 
   // 3. 今日待辦
@@ -1560,8 +1727,9 @@ function getUpcomingCalendarEvents(fromDateStr, limit) {
   const list = [];
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
-    const rowDateStr = Utilities.formatDate(new Date(row[0]), 'GMT+8', 'yyyy-MM-dd');
-    if (rowDateStr >= fromDateStr) {
+    if (!row || !row[0]) continue;
+    const rowDateStr = safeFormatDate(row[0], 'yyyy-MM-dd');
+    if (rowDateStr && rowDateStr >= fromDateStr) {
       list.push({
         date: rowDateStr,
         name: row[1],
@@ -1757,7 +1925,12 @@ function callLineApi(url, payload) {
     muteHttpExceptions: true
   };
   const res = UrlFetchApp.fetch(url, options);
-  console.log(`LINE API 回應代碼 [${res.getResponseCode()}]: ${res.getContentText()}`);
+  const status = res.getResponseCode();
+  const content = res.getContentText();
+  console.log(`LINE API 回應代碼 [${status}]: ${content}`);
+  if (status !== 200) {
+    console.error(`⚠️ LINE API 呼叫異常 [${status}]: ${content}`);
+  }
 }
 
 // ======================== 【對話狀態機與暫存管理】 ========================
@@ -1815,8 +1988,9 @@ function getRecentIncidents(dateStr) {
   const incidents = [];
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
-    const rowDate = Utilities.formatDate(new Date(row[0]), 'GMT+8', 'yyyy-MM-dd');
-    if (rowDate === dateStr) {
+    if (!row || !row[0]) continue;
+    const rowDate = safeFormatDate(row[0], 'yyyy-MM-dd');
+    if (rowDate && rowDate === dateStr) {
       incidents.push(`[${row[2] || '事件'}] ${row[1] || '學生'}：${row[3] || ''}`);
     }
   }
