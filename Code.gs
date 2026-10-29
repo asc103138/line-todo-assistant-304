@@ -187,21 +187,21 @@ function doGet(e) {
 function doPost(e) {
   try {
     if (!e || !e.postData || !e.postData.contents) {
-      return ContentService.createTextOutput('OK');
+      return ContentService.createTextOutput(JSON.stringify({status: 'success'})).setMimeType(ContentService.MimeType.JSON);
     }
 
     const rawContents = e.postData.contents;
 
     // 【極速毫秒響應】：若為 LINE Developers 的 Verify 測試請求，0.1 毫秒內直接回傳 OK，徹底解決 LINE Verify Timeout 問題！
     if (rawContents.indexOf('"events":[]') !== -1 || rawContents === '{}') {
-      return ContentService.createTextOutput('OK');
+      return ContentService.createTextOutput(JSON.stringify({status: 'success'})).setMimeType(ContentService.MimeType.JSON);
     }
 
     console.log('收到 LINE 請求: ' + rawContents);
     const json = JSON.parse(rawContents);
     const events = json.events;
     if (!events || events.length === 0) {
-      return ContentService.createTextOutput('OK');
+      return ContentService.createTextOutput(JSON.stringify({status: 'success'})).setMimeType(ContentService.MimeType.JSON);
     }
 
     for (let i = 0; i < events.length; i++) {
@@ -234,7 +234,7 @@ function doPost(e) {
   } catch (err) {
     console.error('Webhook 處理嚴重錯誤: ' + err.toString());
   }
-  return ContentService.createTextOutput('OK');
+  return ContentService.createTextOutput(JSON.stringify({status: 'success'})).setMimeType(ContentService.MimeType.JSON);
 }
 
 // ======================== 【訊息路由與處理】 ========================
