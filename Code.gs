@@ -1304,6 +1304,118 @@ function handleEveningConfirmation(userId, text, replyToken) {
   replyTextMessage(replyToken, '收到！已為您更新。隨時點選「下班復盤」即可啟動新版逐節復盤！');
 }
 
+
+/**
+ * 【零盲區一鍵檢測：為什麼 LINE 沒反應？】
+ * 請直接在 GAS 編輯器上方選擇本函式，點擊「▶ 執行」
+ * 會在下方「執行記錄」直接印出診斷結果與確切原因！
+ */
+function checkWhyNoResponse() {
+  console.log('================ 🔍 LINE 智慧助教零盲區檢測開始 ================');
+
+  // 1. 檢查 CHANNEL_ACCESS_TOKEN
+  const token = SCRIPT_PROPERTIES.getProperty('CHANNEL_ACCESS_TOKEN') || CONFIG.CHANNEL_ACCESS_TOKEN;
+  console.log('📌 1. 檢查 LINE Channel Access Token:');
+  if (!token || token === 'YOUR_CHANNEL_ACCESS_TOKEN' || token.length < 50) {
+    console.error('❌ 致命錯誤：CHANNEL_ACCESS_TOKEN 尚未設定或無效！');
+    console.error('👉 請在 Apps Script 左側齒輪「專案設定」->「指令碼屬性」中新增屬性：');
+    console.error('   屬性名稱: CHANNEL_ACCESS_TOKEN');
+    console.error('   屬性值: (您在 LINE Developers Console 取得的 Channel access token)');
+    return '❌ 檢測失敗：CHANNEL_ACCESS_TOKEN 未設定！';
+  }
+  console.log(`✅ Token 已讀取（前 10 碼: ${token.substring(0, 10)}...，長度: ${token.length} 字元）`);
+
+  // 2. 測試 Token 是否能與 LINE 官方伺服器通訊（呼叫 Bot Profile API）
+  console.log('📌 2. 向 LINE 官方伺服器驗證 Bot 身分:');
+  try {
+    const res = UrlFetchApp.fetch('https://api.line.me/v2/bot/info', {
+      method: 'get',
+      headers: { 'Authorization': 'Bearer ' + token },
+      muteHttpExceptions: true
+    });
+    const code = res.getResponseCode();
+    const text = res.getContentText();
+    if (code === 200) {
+      const botInfo = JSON.parse(text);
+      console.log(`✅ LINE 憑證驗證成功！Bot 名稱: 【${botInfo.displayName}】，Basic ID: 【${botInfo.basicId}】`);
+    } else {
+      console.error(`❌ LINE 憑證驗證失敗！HTTP 代碼: ${code}，LINE 回應: ${text}`);
+      console.error('👉 請確認 LINE Developers Console 裡的 Channel access token 是否被重新發行 (Re-issue) 或填錯！');
+      return `❌ LINE 憑證無效 (${code}): ${text}`;
+    }
+  } catch (e) {
+    console.error('❌ 無法連線至 LINE 伺服器: ' + e.toString());
+    return '❌ 連線異常: ' + e.toString();
+  }
+
+  // 3. 檢查導師 LINE ID
+  console.log('📌 3. 檢查導師 LINE User ID:');
+  const teacherId = getTeacherUserId();
+  if (!teacherId) {
+    console.warn('⚠️ 尚未綁定導師 User ID！');
+    console.warn('👉 若您在 LINE 輸入訊息沒反應，代表 LINE 的 Webhook 請求根本沒有送到這個 GAS 專案！');
+    console.warn('👉 請檢查 LINE Developers Console 的 Webhook URL 是否正確填入 Web App 網址，並點擊「Verify」！');
+  } else {
+    console.log(`✅ 導師 User ID 已成功鎖定: ${teacherId}`);
+  }
+
+  // 4. 檢查試算表連線
+  console.log('📌 4. 檢查試算表連線:');
+  try {
+    const ss = getSpreadsheet();
+    console.log(`✅ 試算表綁定正常: 【${ss.getName()}】`);
+    const sheets = ss.getSheets().map(s => s.getName());
+    console.log(`   現有分頁: ${sheets.join(', ')}`);
+  } catch (e) {
+    console.error('❌ 試算表連線失敗: ' + e.toString());
+  }
+
+  // 5. 立即發送一則強制測試訊息至導師 LINE
+  if (teacherId) {
+    console.log('📌 5. 嘗試向導師手機發送測試訊息:');
+    try {
+      const testRes = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
+        method: 'post',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + token
+        },
+        payload: JSON.stringify({
+          to: teacherId,
+          messages: [{
+            type: 'text',
+            text: `🔔 【LINE 雙向通訊檢測成功】\n━━━━━━━━━━━━━━\n檢測時間：${Utilities.formatDate(new Date(), 'GMT+8', 'yyyy-MM-dd HH:mm:ss')}\n恭喜老師！GAS 與 LINE Messaging API 的雙向通訊完全正常！\n\n請在此對話框中直接回傳「快速備課」即可立即使用！`
+          }]
+        }),
+        muteHttpExceptions: true
+      });
+      const pushCode = testRes.getResponseCode();
+      const pushText = testRes.getContentText();
+      if (pushCode === 200) {
+        console.log('🎉 測試訊息已成功推播至您的手機！請查看 LINE！');
+      } else {
+        console.error(`❌ 推播失敗！HTTP 代碼: ${pushCode}，回應內容: ${pushText}`);
+      }
+    } catch (e) {
+      console.error('❌ 發送推播時發生例外: ' + e.toString());
+    }
+  }
+
+  // 6. 輸出 Webhook 診斷建議
+  console.log('📌 6. 若手機依然沒有收到訊息或在 LINE 輸入沒反應的【三大排查關鍵】：');
+  console.log('  1️⃣ 【LINE Developers Console 檢查 Webhook URL】：');
+  console.log('     網址必須是 GAS 部署的 Web App URL（以 /exec 結尾，非 /dev）。');
+  console.log('     請務必點擊【Verify】按鈕，必須出現「Success (200)」！');
+  console.log('     並且務必開啟【Use Webhook: ON】！');
+  console.log('  2️⃣ 【LINE Official Account Manager 回應設定】：');
+  console.log('     請登入 https://manager.line.biz/ 進入該帳號 -> 設定 -> 回應設定：');
+  console.log('     - 回應模式：必須為「聊天機器人 (Bot)」');
+  console.log('     - Webhook：必須為「開啟」');
+  console.log('     - 自動回應訊息：建議「關閉」（避免被系統內建罐頭訊息攔截）');
+  console.log('================ 🔍 檢測結束 ================');
+  return '檢測完成，請查看上方 Execution log 日誌！';
+}
+
 // ======================== 【定時排程推播與觸發條件管理】 ========================
 
 /**
