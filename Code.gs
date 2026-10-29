@@ -248,7 +248,7 @@ function handleIncomingMessage(event) {
       '重新設計進度', '重新設計課程進度', '重排進度', '重新規劃進度',
       '班費收支', '班費結餘',
       '學生突發', '學生事件',
-      '快速備課', '備課指引',
+      '快速備課', '備課指引', '備課錦囊', '備課', '我要備課', '數學備課', '國語備課', '社會備課', '作文備課', '期中考前範圍圖', '考前範圍海報', '考前範圍',
       '個人儀表板', '開啟儀表板',
       '重置狀態', '重置復盤'
     ];
@@ -335,7 +335,17 @@ function handleIncomingMessage(event) {
 
       case '快速備課':
       case '備課指引':
-        replyPreparationTips(replyToken);
+      case '備課錦囊':
+      case '備課':
+      case '我要備課':
+      case '數學備課':
+      case '國語備課':
+      case '社會備課':
+      case '作文備課':
+      case '期中考前範圍圖':
+      case '考前範圍海報':
+      case '考前範圍':
+        replyPreparationTips(replyToken, text);
         break;
 
       case '個人儀表板':
@@ -355,6 +365,12 @@ ${webAppUrl}
         break;
 
       default:
+        // 若輸入包含備課、教案或考前範圍，直接調用實戰即用型快速備課神器
+        if (text.includes('備課') || text.includes('教案') || text.includes('考前範圍') || text.includes('範圍圖')) {
+          replyPreparationTips(replyToken, text);
+          break;
+        }
+
         // 若為一般自然語言，交由 Gemini 分析意圖（是臨時交辦、突發事件、還是教學諮詢）
         handleNaturalLanguageQuery(text, replyToken, userId);
         break;
@@ -1707,24 +1723,168 @@ ${JSON.stringify(schedule, null, 2)}
   replyTextMessageWithQuickReply(replyToken, proposalText, quickReplies);
 }
 
-function replyPreparationTips(replyToken) {
-  const today = new Date();
-  const dayZh = getDayOfWeekZh(today.getDay());
-  const schedule = getScheduleByDay(dayZh);
-  let mainSubjects = schedule.filter(s => s.type === '導師課').map(s => s.subject).join('、');
+/**
+ * 國小導師專屬「實戰即用型快速備課神器」
+ * - 自動辨識時間：若已過 15:30 放學或週末假日，自動鎖定「次一正式教學日（如明天）」的課表科目
+ * - 支援多維度實用落地：
+ *   1. 總覽模式：提供明日（或今日）課表、導師科目進度與 5 大快捷科目按鈕
+ *   2. 數學專用：南一數 4上 螺旋複習、除法/三角形試商口訣、隨堂三題黑板題與解答
+ *   3. 國語專用：翰林國 4上 第6課第四段、讀信格式、生字難字、閱讀三層次提問
+ *   4. 作文專用：期中前第4篇作文「我最敬佩的人」四段結構鷹架、謄稿互評檢核表
+ *   5. 社會專用：康軒社 4上 第二單元傳統住屋與生活器物就地取材圖表
+ *   6. 範圍圖專用：10/30 (下週五) 期中定期評量範圍推播家長圖文草稿
+ */
+function replyPreparationTips(replyToken, queryText) {
+  const query = String(queryText || '').trim();
+  const now = new Date();
+  const currentHour = now.getHours();
 
-  const prompt = `你是一名【臺中市梧棲區中正國小四年級】教學輔導顧問，嚴格遵守【G4 Curriculum Review 全域三階漏斗審查】：
-- 教科書版本：南一數學 4上、翰林國語 4上、康軒社會 4上、校本彈性梧風啟航
-- 在地生活情境：臺中港海線、梧棲老街、高美濕地、九降風環境
+  // 若目前時間在 15:30 之後或今天不是正式上課日，自動針對「下一個教學日」備課
+  const todayInfo = getDateHolidayInfo(now);
+  let targetDateObj = now;
+  let isNextDay = false;
 
-${getCurriculumPromptContext()}
+  if (currentHour >= 15 || !todayInfo.isSchoolDay) {
+    const nextSchool = getNextSchoolDay(now);
+    targetDateObj = nextSchool.dateObj;
+    isNextDay = true;
+  }
 
-今天星期${dayZh}，四年丙班導師今天的導師課有：【${mainSubjects || '國語、數學'}】。
-請針對這幾門科目在 115 四上真實當前進度（南一數期中已教完進入複習精熟；翰林國未教第6課第四段與統整活動一二；康軒社未教第二單元住屋與器物；作文尚缺一篇），提供 3 點「極度實用、符合認知負荷(CLT)、切中四年級典型迷思（如除法位值補零估商、三角形等腰性質、六何法閱讀理解、傳統住屋取材特色）」的教學與常規小錦囊。
-文字請在 250 字內，條列明確，絕不空談泛用理論。`;
+  const targetDateStr = safeFormatDate(targetDateObj, 'yyyy-MM-dd');
+  const targetDayZh = getDayOfWeekZh(targetDateObj.getDay());
+  const schedule = getScheduleByDay(targetDayZh);
+  const uniformNote = CONFIG.UNIFORMS[targetDayZh] || '便服';
+  const calendarEvents = getCalendarEvents(targetDateStr);
 
-  const tips = callGeminiText(prompt);
-  replyTextMessage(replyToken, `💡 【四年丙班 (304) 快速備課小錦囊】\n━━━━━━━━━━━━━━\n${tips}`);
+  const homeroomPeriods = schedule.filter(s => isHomeroomSubject(s.subject));
+  const homeroomSubjectNames = Array.from(new Set(homeroomPeriods.map(s => s.subject))).join('、');
+
+  // Quick Replies 快捷按鈕列
+  const prepQuickReplies = [
+    { label: '📐 數學即用教案', text: '數學備課' },
+    { label: '📘 國語即用教案', text: '國語備課' },
+    { label: '✍️ 作文謄稿互評', text: '作文備課' },
+    { label: '📗 社會即用教案', text: '社會備課' },
+    { label: '📢 考前範圍海報', text: '期中考前範圍圖' }
+  ];
+
+  // 1. 若查詢包含「數」
+  if (query.includes('數')) {
+    const mathContent = `📐 【南一數學 4上・期中考螺旋複習即用備課卡】\n` +
+      `━━━━━━━━━━━━━━\n` +
+      `🎯 教學範圍：單元一～五（億以內數、乘法、角度、除法、三角形）\n` +
+      `📌 課堂核心：除法試商補零錯題診斷、三角形等腰性質精熟\n\n` +
+      `📝 【關鍵板書與口訣】：\n` +
+      `1. 除法試商：除數是兩位，先看被除數前兩位；前兩位不夠除，看前三位。\n` +
+      `2. 補零防漏口訣：「除到哪一位，商寫在哪一位；不夠除，商記 0 佔位！」（例：624÷20＝31...4，不可寫成 3...4）\n` +
+      `3. 三角形判定：「兩邊等長是等腰，兩底角必相等；三邊等長是正三角，三角皆 60 度。」\n\n` +
+      `✏️ 【課堂黑板隨堂 3 題（可直接抄給學生做）】：\n` +
+      `Q1: 480 ÷ 24 ＝ [ 20 ] （檢核商的個位是否漏補 0）\n` +
+      `Q2: 756 ÷ 36 ＝ [ 21 ] （二位數除法試商調商演練）\n` +
+      `Q3: [素養題] 梧棲漁港一箱白鯧魚賣 850 元，平分給 25 位遊客，每人應付多少元？\n` +
+      `    ➔ 算式：850 ÷ 25 ＝ 34 (元)\n\n` +
+      `💡 易錯迷思：除法餘數大於或等於除數、量角器中心點與內外圈刻度看錯。課堂可請學生交換檢視！`;
+
+    replyTextMessageWithQuickReply(replyToken, mathContent, prepQuickReplies);
+    return;
+  }
+
+  // 2. 若查詢包含「國」
+  if (query.includes('國')) {
+    const chineseContent = `📘 【翰林國語 4上・第6課第四段與統整活動一備課卡】\n` +
+      `━━━━━━━━━━━━━━\n` +
+      `🎯 教學範圍：第6課《又遠又近的月亮》第四段科技省思、統整活動一\n` +
+      `📌 課堂核心：登月科技省思、句型「就算…也…」、讀信書信格式\n\n` +
+      `📝 【課堂 3 層次提問設計】：\n` +
+      `1. 訊息提取：從古人看月亮到現代人類登月，人類科技有了什麼具體突破？（阿波羅計畫、阿提米絲月球探測）\n` +
+      `2. 推論理解：為什麼課文標題叫做「又遠又近的月亮」？（空間距離很遠，但科技與人類的情感讓月亮很近）\n` +
+      `3. 句型造句：就算……也……\n` +
+      `   ➔ 例句：「就算冬季九降風再強勁，梧棲的船長也勇敢掌舵出航。」\n\n` +
+      `✍️ 【生字難字提醒】：\n` +
+      `・「載」：車部，半包圍結構，右上方戈部筆畫為先橫、斜勾、後撇點。\n` +
+      `・「宇」與「宙」：寶蓋頭，上下結構，引導宇宙時空概念。\n\n` +
+      `📋 【統整活動一重點】：信件五大格式（稱謂、問候語、正文、祝福語、署名與日期）。`;
+
+    replyTextMessageWithQuickReply(replyToken, chineseContent, prepQuickReplies);
+    return;
+  }
+
+  // 3. 若查詢包含「作」
+  if (query.includes('作')) {
+    const writingContent = `✍️ 【期中前第 4 篇作文：《我最敬佩的人》謄稿互評指導卡】\n` +
+      `━━━━━━━━━━━━━━\n` +
+      `🎯 目標：完成期中評量前第4篇作文，指導首稿修改、謄真與同儕互評。\n\n` +
+      `🧱 【四段鷹架結構引導】：\n` +
+      `・第一段（引言）：介紹他是誰？他的外貌、身份或你們認識的機緣。（點出敬佩對象：如海線消防員、辛勞的母親、老街傳承師傅）\n` +
+      `・第二段（事例一）：描寫一件他最令你印象深刻的事蹟（動態描寫、神態語言）。\n` +
+      `・第三段（事例二/細節）：在面對困難或辛勞時，他展現出的堅持、善良或敬業精神。\n` +
+      `・第四段（結尾）：他對我產生的影響與啟發，我希望能向他學習什麼特質。\n\n` +
+      `🔍 【同儕互評 4 大檢核點】：\n` +
+      `[ ] 標點符號：每格一字，上下引號、逗號句號位置正確。\n` +
+      `[ ] 錯別字：挑出至少 2 個易錯字並請作者訂正。\n` +
+      `[ ] 修辭佳句：圈出一句運用譬喻、感官摹寫或排比的好句子。\n` +
+      `[ ] 具體事例：是否寫出完整的一件事，而不是空泛讚美？`;
+
+    replyTextMessageWithQuickReply(replyToken, writingContent, prepQuickReplies);
+    return;
+  }
+
+  // 4. 若查詢包含「社」
+  if (query.includes('社')) {
+    const socialContent = `📗 【康軒社會 4上・第二單元《家鄉的傳統住屋與器物》備課卡】\n` +
+      `━━━━━━━━━━━━━━\n` +
+      `🎯 教學範圍：2-1 傳統住屋與生活環境（三合院、土埆厝、石板屋、高腳屋）\n` +
+      `📌 課堂核心：就地取材的生活智慧、住屋結構與氣候環境的互動\n\n` +
+      `📝 【核心觀念比較表（可直接畫在黑板）】：\n` +
+      `・三合院：閩南傳統建築，正身（長輩居中神明廳）＋左右護龍（子孫居住，重視倫理與宗族團結）。\n` +
+      `・土埆厝：早期平原農業社會，用稻草、泥土、稻穀混合曬乾製成土埆磚（冬暖夏涼、經濟實用）。\n` +
+      `・石板屋：原住民排灣族、魯凱族，就地取材頁岩或板岩（耐震、防風、適應山區氣候）。\n` +
+      `・高腳屋：適應潮濕多雨、防蛇蟲侵害與通風散熱。\n\n` +
+      `🌊 【海線在地情境連結】：\n` +
+      `結合梧棲老街傳統街屋建築特色（紅磚街屋、防九降風之天井格局），讓孩子感受傳統住屋之美！`;
+
+    replyTextMessageWithQuickReply(replyToken, socialContent, prepQuickReplies);
+    return;
+  }
+
+  // 5. 若查詢包含「範圍」或「海報」
+  if (query.includes('範圍') || query.includes('海報')) {
+    const noticeDraft = `📢 【304班 期中定期評量範圍與重要叮嚀】（家長通知草稿）\n` +
+      `━━━━━━━━━━━━━━\n` +
+      `親愛的 304 班家長您好：\n` +
+      `本學期第一次定期評量即將於下週 11/05(四) ~ 11/06(五) 舉行，請家長協助孩子按部就班複習，保持充沛睡眠！\n\n` +
+      `📅 【評量日期與考科範圍】：\n` +
+      `📘 11/05 (四)：\n` +
+      `  - 國語科：翰林版 第 1～6 課、統整活動（一）、統整活動（二）\n` +
+      `  - 自然科：第一單元～第二單元（科任教師命題）\n` +
+      `📘 11/06 (五)：\n` +
+      `  - 數學科：南一版 單元一至五（一億以內的數、乘法、角度、除法、三角形）\n` +
+      `  - 社會科：康軒版 第一單元、第二單元\n` +
+      `  - 英語科：Unit 1 ~ Review 1（科任教師命題）\n\n` +
+      `💡 【導師叮嚀】：\n` +
+      `1. 數學重視除法計算的驗算與審題，三角形請攜帶量角器與直尺。\n` +
+      `2. 國語請加強生字生詞、成語運用與課文深究理解。\n` +
+      `如有任何學習問題，歡迎隨時與老師聯繫！`;
+
+    replyTextMessageWithQuickReply(replyToken, noticeDraft, prepQuickReplies);
+    return;
+  }
+
+  // 預設總覽模式（智慧鎖定教學日）
+  const timeTargetDesc = isNextDay ? `明天 【${targetDateStr} 週${targetDayZh}】` : `今日 【${targetDateStr} 週${targetDayZh}】`;
+  const overviewMsg = `💡 【四年丙班 (304) 實戰即用型快速備課錦囊】\n` +
+    `━━━━━━━━━━━━━━\n` +
+    `🎯 備課鎖定目標：${timeTargetDesc}（${uniformNote}）\n` +
+    `${calendarEvents.length > 0 ? `🏫 學校行事：${calendarEvents.join('、')}\n` : ''}` +
+    `📚 本日導師授課科目：【${homeroomSubjectNames || '數學、國語、閱讀作文'}】\n\n` +
+    `⚡ 【明日教學衝刺 3 大關鍵任務】：\n` +
+    `1. 📐 數學（南一）：期中前五單元總複習，精熟除法三位數除以二位數試商補零錯題。\n` +
+    `2. 📘 國語（翰林）：攻堅第6課第四段登月科技省思與統整活動一讀信格式。\n` +
+    `3. ✍️ 作文（綜合/閱讀）：落實第4篇作文「我最敬佩的人」謄稿互評，補足期中作文缺額。\n` +
+    `4. 📢 教務里程碑：下週定期評量在即，可發送期中考範圍海報安撫家長焦慮。\n\n` +
+    `👉 請點選下方按鈕，立即獲取該科「黑板板書、迷思口訣、隨堂三題」即用教案卡：`;
+
+  replyTextMessageWithQuickReply(replyToken, overviewMsg, prepQuickReplies);
 }
 
 function getScheduleByDay(dayZh) {
