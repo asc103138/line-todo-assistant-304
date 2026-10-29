@@ -1872,19 +1872,22 @@ function replyPreparationTips(replyToken, queryText) {
   // 若目前時間在 15:30 之後或今天不是正式上課日，自動針對「下一個教學日」備課
   const todayInfo = getDateHolidayInfo(now);
   let targetDateObj = now;
+  let targetDateStr = safeFormatDate(now, 'yyyy-MM-dd');
+  let targetDayZh = getDayOfWeekZh(now.getDay());
+  let calendarEvents = getCalendarEvents(targetDateStr);
   let isNextDay = false;
 
   if (currentHour >= 15 || !todayInfo.isSchoolDay) {
     const nextSchool = getNextSchoolDay(now);
-    targetDateObj = nextSchool.dateObj;
+    targetDateObj = nextSchool.date;
+    targetDateStr = nextSchool.dateStr;
+    targetDayZh = nextSchool.dayZh;
+    calendarEvents = nextSchool.calendarEvents;
     isNextDay = true;
   }
 
-  const targetDateStr = safeFormatDate(targetDateObj, 'yyyy-MM-dd');
-  const targetDayZh = getDayOfWeekZh(targetDateObj.getDay());
   const schedule = getScheduleByDay(targetDayZh);
   const uniformNote = CONFIG.UNIFORMS[targetDayZh] || '便服';
-  const calendarEvents = getCalendarEvents(targetDateStr);
 
   const homeroomPeriods = schedule.filter(s => isHomeroomSubject(s.subject));
   const homeroomSubjectNames = Array.from(new Set(homeroomPeriods.map(s => s.subject))).join('、');
