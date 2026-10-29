@@ -201,20 +201,31 @@ function doPost(e) {
       const event = events[i];
       const userId = event.source ? event.source.userId : null;
 
-      // 自動記錄或更新導師的 User ID（只要是以 U 開頭的標準 LINE User ID）
+      // 自動記錄導師 ID（以安全 try-catch 包裹，絕不阻斷訊息處理）
       if (userId && String(userId).startsWith('U')) {
-        SCRIPT_PROPERTIES.setProperty('TEACHER_USER_ID', userId);
-        CONFIG.TEACHER_USER_ID = userId;
+        try {
+          CONFIG.TEACHER_USER_ID = userId;
+          SCRIPT_PROPERTIES.setProperty('TEACHER_USER_ID', userId);
+        } catch (propErr) {
+          console.warn('設定 SCRIPT_PROPERTIES 忽略: ' + propErr);
+        }
       }
 
       if (event.type === 'message') {
-        handleIncomingMessage(event);
+        try {
+          handleIncomingMessage(event);
+        } catch (msgErr) {
+          console.error('handleIncomingMessage 異常: ' + (msgErr.stack || msgErr));
+          if (event.replyToken) {
+            replyTextMessage(event.replyToken, '⚠️ 處理訊息時發生錯誤：' + msgErr.message + '，請再試一次或輸入「快速備課」！');
+          }
+        }
       } else if (event.type === 'postback') {
         console.log('收到 Postback: ' + JSON.stringify(event.postback));
       }
     }
   } catch (err) {
-    console.error('Webhook 處理錯誤: ' + err.toString());
+    console.error('Webhook 處理嚴重錯誤: ' + err.toString());
   }
   return ContentService.createTextOutput('OK');
 }
