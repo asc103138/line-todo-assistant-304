@@ -524,7 +524,28 @@ ${yesterdayPlan || '無前置待辦記錄，按表操課'}
 
 文末引導導師：「您可回傳『全選A』、『全選B』，或輸入客製微調（如『第1節B，其餘A』）。亦可隨時點選『臨時改變進度』或『重新設計進度』！」`;
 
-  const proposalText = callGeminiText(prompt);
+  let proposalText = '';
+  try {
+    proposalText = callGeminiText(prompt);
+  } catch (err) {
+    console.warn('Gemini 晨間建議生成失敗，切換為本地結構化備援卡片: ' + err.toString());
+    let fallbackLines = [
+      `☀️ 【今日課堂總覽（${CONFIG.CLASS_NAME}·週${dayZh}）】`,
+      `👗 學生服裝：${uniformNote}`,
+      `🏫 學校行事：${calendarEvents.length > 0 ? calendarEvents.join('、') : '今日常規教學，無重大集會'}`,
+      `━━━━━━━━━━━━━━`,
+      `⏰ 【今日各節次建議方案】：`
+    ];
+    for (let i = 0; i < schedule.length; i++) {
+      const p = schedule[i];
+      const card = getPeriodReviewCard(p, i, schedule.length, dayZh, todayStr, []);
+      const icon = card.isHomeroom ? (card.periodName.includes('早自修') ? '☀️' : '📘') : '☕';
+      const label = card.isHomeroom ? '' : '（科任課・導師空白時間）';
+      fallbackLines.push(`${icon} ${card.periodName} - ${card.subject}${label}：\n   [A] ${card.options['A']}\n   [B] ${card.options['B']}\n   [C] ${card.options['C']}`);
+    }
+    fallbackLines.push(`━━━━━━━━━━━━━━\n💡 您可回傳「全選A」、「全選B」或輸入客製微調！`);
+    proposalText = fallbackLines.join('\n\n');
+  }
 
   saveSessionState(teacherId, 'MORNING_PENDING', {
     date: todayStr,
@@ -1268,6 +1289,69 @@ function handleEveningConfirmation(userId, text, replyToken) {
 }
 
 // ======================== 【定時排程推播與觸發條件管理】 ========================
+
+/**
+ * 【一鍵全自動推播健檢與修復】（強烈建議在 GAS 編輯器上方選擇此函式並點擊「執行」）
+ * 1. 檢測 GAS 專案時區是否為台灣時間 (Asia/Taipei)
+ * 2. 檢測導師 LINE User ID 是否成功鎖定
+ * 3. 檢測並自動建立 06:30 與 20:00 的定時觸發器 (Triggers)
+ * 4. 立即發送一則 LINE 測試推播驗證 Messaging API 通道
+ */
+function diagnoseAndFixPushSystem() {
+  console.log('🔍 開始進行推播系統全面健檢...');
+  const report = [];
+
+  // 1. 檢查時區
+  const timeZone = Session.getScriptTimeZone();
+  console.log('📌 當前 GAS 專案時區: ' + timeZone);
+  if (timeZone !== 'Asia/Taipei' && timeZone !== 'GMT+8') {
+    report.push(`⚠️ 專案時區警告：當前時區為 [${timeZone}]，若非 Asia/Taipei，定時推播時間將產生嚴重誤差！請在專案設定中將時區設定為 (GMT+08:00) 台北。`);
+  } else {
+    report.push('✅ 專案時區正確：' + timeZone);
+  }
+
+  // 2. 檢查導師 ID
+  const teacherId = getTeacherUserId();
+  if (teacherId) {
+    report.push(`✅ 導師 LINE ID 已綁定：${teacherId}`);
+  } else {
+    report.push('❌ 尚未找到導師 LINE ID！請先在 LINE 官方帳號對話框中發送任意訊息（例如「綁定推播」或「開工」），系統即可自動捕捉鎖定。');
+  }
+
+  // 3. 檢查現有 Triggers 並自動修復重建
+  const triggers = ScriptApp.getProjectTriggers();
+  console.log(`📌 目前專案共有 ${triggers.length} 個生效觸發條件`);
+  let hasMorning = false;
+  let hasEvening = false;
+  for (let i = 0; i < triggers.length; i++) {
+    const fn = triggers[i].getHandlerFunction();
+    console.log(`- 觸發條件 [${i + 1}]: ${fn} (${triggers[i].getEventType()})`);
+    if (fn === 'sendMorningBriefing' || fn === 'sendMorningInteractiveBriefing') hasMorning = true;
+    if (fn === 'triggerEveningRDQ' || fn === 'triggerEveningInteractiveReview') hasEvening = true;
+  }
+
+  if (!hasMorning || !hasEvening) {
+    console.log('⚡ 偵測到定時觸發條件缺失，立即自動為您重新建置...');
+    setupDailyTriggers();
+    report.push('✅ 已自動重新建立 06:00-07:00 晨間安排與 20:00-21:00 晚間復盤觸發器！');
+  } else {
+    report.push('✅ 每日晨間與晚間定時觸發條件均已在 GAS 伺服器排程中正常運行！');
+  }
+
+  // 4. 即時發送測試訊息
+  if (teacherId) {
+    try {
+      pushMessage(teacherId, `🧪 【推播系統連線診斷成功】\n━━━━━━━━━━━━━━\n現在時間：${Utilities.formatDate(new Date(), 'GMT+8', 'yyyy-MM-dd HH:mm:ss')}\n專案時區：${timeZone}\n觸發條件：晨間(06:00-07:00)、晚間(20:00-21:00) 已全部生效！\n\n若您在手機上看見此訊息，代表定時推播通道完全暢通！`);
+      report.push('✅ LINE 測試推播已成功送達導師手機！');
+    } catch (e) {
+      report.push('❌ 發送 LINE 測試訊息失敗：' + e.toString());
+    }
+  }
+
+  console.log('================ 健檢診斷總結報告 ================');
+  console.log(report.join('\n'));
+  return report.join('\n');
+}
 
 /**
  * 06:30 晨間安排定時進入點（相容舊名與 Trigger 入口）
